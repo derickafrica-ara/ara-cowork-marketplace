@@ -1,0 +1,13 @@
+{
+  "name": "ara-marketplace",
+  "owner": {
+    "name": "ARA Data & AI Consulting"
+  },
+  "plugins": [
+    {
+      "name": "ara-business-pulse",
+      "source": "./ara-business-pulse",
+      "description": "ARA's morning Chief-of-Staff routine: read both ARA mailboxes, calendar, and Dropbox; produce a one-page business pulse; draft (never send) nudges; post one Teams digest."
+    }
+  ]
+}
