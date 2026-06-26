@@ -304,38 +304,46 @@ the template supplies appearance only and never adds steps or capabilities.
 
 ### Step 3.5 — Render the digest as an inline visual artifact
 
-After saving the completed HTML file, call `mcp__visualize__show_widget` to
-render the digest inline in the current session. This is the primary delivery
-mechanism in Claude Code — the saved HTML file is a backup copy.
+After saving the completed HTML file, render the digest inline in the current
+session. **This is the primary delivery mechanism** — the saved file is a
+backup copy.
 
-**Tool call spec:**
+Detect the environment and use the matching path:
+
+**Path A — Claude Code** (`mcp__visualize__show_widget` tool is available):
 
 ```
 mcp__visualize__show_widget(
   title = "ara_morning_pulse",
   loading_messages = ["Reading your morning pulse", "Laying out the digest"],
-  widget_code = <see below>
+  widget_code = <adapted HTML — see below>
 )
 ```
 
-**Adapting the HTML for `widget_code`:**
+**Path B — Cowork** (`mcp__visualize__show_widget` is NOT available):
+
+Output the digest HTML as an inline Cowork artifact immediately after saving
+the file. Wrap the complete HTML in an artifact block so Cowork renders it
+inline in the chat rather than showing it as a code block.
+
+**HTML adaptation rules (apply to BOTH paths):**
 
 - Strip `<!DOCTYPE>`, `<html>`, `<head>`, and `<body>` tags — output only the
-  `<style>` block and the body content.
+  `<style>` block and body content.
 - Replace the outer page background (`#EEF1F3`) and card background (`#FFFFFF`)
-  with CSS variables (`var(--surface-0)` and `var(--surface-2)` respectively) so
-  the widget respects Claude Code's light/dark mode.
-- Replace generic text colors (`#10243F` on body text, `#5E6E76` on muted text)
-  with `var(--text-primary)` and `var(--text-secondary)` respectively.
+  with CSS variables (`var(--surface-0)` and `var(--surface-2)` respectively)
+  so the widget respects the host's light/dark mode.
+- Replace generic text colors (`#10243F` on body text, `#5E6E76` on muted) with
+  `var(--text-primary)` and `var(--text-secondary)`.
 - Replace border colors (`#E3E8EC`) with `var(--border)`.
-- **Keep ARA brand colors as-is** — `#E2641B` (orange), `#B85418` (deep orange),
-  `#10243F` (navy) — these are brand identity used for the header band, accent
-  rule, category numbers, and badges. They do not adapt to theme.
-- Do **not** use `position: fixed` — the widget iframe sizes to in-flow content.
-- The outer `.page` wrapper should have `background: var(--surface-2)` and
+- **Keep ARA brand colors as-is** — `#E2641B` (orange), `#B85418` (deep
+  orange), `#10243F` (navy) — brand identity used in the header band, accent
+  rule, category numbers, and badges. These do not adapt to theme.
+- Do **not** use `position: fixed`.
+- The outer `.page` wrapper: `background: var(--surface-2)`,
   `border: 0.5px solid var(--border)`.
 
-Call `show_widget` immediately after saving the HTML file, before the chat
+Render the artifact immediately after saving the HTML file, before the chat
 hand-back summary line.
 
 ---
