@@ -302,6 +302,44 @@ template only gives them the ARA-branded, scannable layout with WAITING-ON-A-
 CONTACT as the visual headline). The **content/structure is fixed by this skill**;
 the template supplies appearance only and never adds steps or capabilities.
 
+### Step 3.5 — Render the digest as an inline visual artifact
+
+After saving the completed HTML file, call `mcp__visualize__show_widget` to
+render the digest inline in the current session. This is the primary delivery
+mechanism in Claude Code — the saved HTML file is a backup copy.
+
+**Tool call spec:**
+
+```
+mcp__visualize__show_widget(
+  title = "ara_morning_pulse",
+  loading_messages = ["Reading your morning pulse", "Laying out the digest"],
+  widget_code = <see below>
+)
+```
+
+**Adapting the HTML for `widget_code`:**
+
+- Strip `<!DOCTYPE>`, `<html>`, `<head>`, and `<body>` tags — output only the
+  `<style>` block and the body content.
+- Replace the outer page background (`#EEF1F3`) and card background (`#FFFFFF`)
+  with CSS variables (`var(--surface-0)` and `var(--surface-2)` respectively) so
+  the widget respects Claude Code's light/dark mode.
+- Replace generic text colors (`#10243F` on body text, `#5E6E76` on muted text)
+  with `var(--text-primary)` and `var(--text-secondary)` respectively.
+- Replace border colors (`#E3E8EC`) with `var(--border)`.
+- **Keep ARA brand colors as-is** — `#E2641B` (orange), `#B85418` (deep orange),
+  `#10243F` (navy) — these are brand identity used for the header band, accent
+  rule, category numbers, and badges. They do not adapt to theme.
+- Do **not** use `position: fixed` — the widget iframe sizes to in-flow content.
+- The outer `.page` wrapper should have `background: var(--surface-2)` and
+  `border: 0.5px solid var(--border)`.
+
+Call `show_widget` immediately after saving the HTML file, before the chat
+hand-back summary line.
+
+---
+
 ### Step 4 — Draft nudges for overdue waiting-on-a-contact items (DRAFT ONLY)
 
 For the **time-sensitive / overdue** items in category 2 (and only those — this is
