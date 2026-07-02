@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "ara-business-pulse",
   "displayName": "ARA Business Pulse",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "ARA's morning Chief-of-Staff routine: read both ARA mailboxes, calendar, and Dropbox; produce a one-page business pulse; draft (never send) nudges; post one Teams digest.",
   "author": { "name": "ARA Data & AI Consulting" },
   "keywords": ["chief-of-staff", "business-pulse", "apple-mail", "ara", "mcp"]
