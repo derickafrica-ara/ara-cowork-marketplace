@@ -112,11 +112,15 @@ on 8787) with a toolbar showing "Data last refreshed on hh:mm:ss dd/mm/yyyy"
 and a **Refresh** button that runs the skill headlessly in Claude Code and
 reloads the page when done.
 
-**Install (once per machine):**
+**Install: automatic.** The plugin's first-run bootstrap (SessionStart hook)
+installs the viewer and the 7:00 AM weekday refresh on macOS — nothing to run
+by hand. It also downloads a private standalone Python into the plugin data
+dir if the laptop has none (no Homebrew, no admin password). Manual fallback
+if ever needed:
 
 ```sh
 cd <plugin dir>/pulse-server
-./install.sh --with-morning-run   # omit the flag to skip the 7:00 AM weekday run
+./install.sh --with-morning-run
 ```
 
 Then bookmark http://127.0.0.1:8788 — or set it as a Chrome startup page
