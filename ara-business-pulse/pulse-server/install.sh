@@ -17,10 +17,19 @@ fi
 
 mkdir -p "$AGENTS" "$HOME/Library/Logs/ara-pulse-server"
 
+# Copy server.py to a DURABLE location before pointing launchd at it. $HERE
+# can be an ephemeral plugin-cache path (e.g. /var/folders/.../T/...) that
+# macOS wipes — a plist pointing there leaves KeepAlive respawning a missing
+# file and the viewer dead until the next plugin update. The stable copy is
+# refreshed on every install run.
+STABLE_DIR="$HOME/Library/Application Support/ara-pulse-server"
+mkdir -p "$STABLE_DIR"
+cp "$HERE/server.py" "$STABLE_DIR/server.py"
+
 install_plist() {
   local name="$1"
   sed -e "s|__PYTHON__|$PYTHON|g" \
-      -e "s|__SERVER__|$HERE/server.py|g" \
+      -e "s|__SERVER__|$STABLE_DIR/server.py|g" \
       -e "s|__HOME__|$HOME|g" \
       "$HERE/launchd/$name.plist" > "$AGENTS/$name.plist"
   launchctl bootout "gui/$(id -u)/$name" 2>/dev/null || true
