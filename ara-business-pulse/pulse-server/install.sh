@@ -34,5 +34,33 @@ if [[ "${1:-}" == "--with-morning-run" ]]; then
   install_plist "com.ara.pulse-morning"
 fi
 
+# ---------------------------------------------------------------------------
+# CLI-scope plugin registration (zero-touch Refresh). Headless `claude -p`
+# runs — and terminal/worktree sessions — use the user-level CLI plugin
+# registry, NOT the Desktop Directory install. Register the plugin there too
+# so the Refresh button's headless run can load it. SOFT-FAIL discipline: the
+# viewer must still install even if the CLI is missing or the network is down
+# (Refresh reports its own generic error; serving is never blocked).
+MARKETPLACE_URL="https://github.com/derickafrica-ara/ara-cowork-marketplace.git"
+MARKETPLACE_NAME="ara-marketplace"
+PLUGIN_NAME="ara-business-pulse"
+
+CLAUDE_BIN=""
+for cand in "$(command -v claude || true)" "$HOME/.local/bin/claude" \
+            "$HOME/.claude/local/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do
+  if [[ -n "$cand" && -x "$cand" ]]; then CLAUDE_BIN="$cand"; break; fi
+done
+
+if [[ -z "$CLAUDE_BIN" ]]; then
+  echo "[pulse-server] WARNING: claude CLI not found — skipping CLI plugin registration (the Refresh button needs it)."
+elif ! "$CLAUDE_BIN" plugin list 2>/dev/null | grep -q "${PLUGIN_NAME}@${MARKETPLACE_NAME}"; then
+  echo "[pulse-server] Registering ${PLUGIN_NAME} for headless runs (CLI user scope)..."
+  "$CLAUDE_BIN" plugin marketplace list 2>/dev/null | grep -q "${MARKETPLACE_NAME}" || \
+    "$CLAUDE_BIN" plugin marketplace add "$MARKETPLACE_URL" || \
+    echo "[pulse-server] WARNING: could not add marketplace (offline?) — Refresh won't work until this succeeds; it retries on the next plugin update."
+  "$CLAUDE_BIN" plugin install "${PLUGIN_NAME}@${MARKETPLACE_NAME}" || \
+    echo "[pulse-server] WARNING: CLI plugin install failed — Refresh won't work until this succeeds; it retries on the next plugin update."
+fi
+
 echo "[pulse-server] Done. Bookmark http://127.0.0.1:8788 in Chrome"
 echo "[pulse-server] (Chrome > Settings > On startup > Open specific page)."

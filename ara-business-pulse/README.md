@@ -151,6 +151,9 @@ write can never become arbitrary command execution (Floyd gate F3):
 | `pulse_html_dir` | `~/Claude/Projects/ARA-Business-Pulse` | where the skill saves `pulse-*.html` |
 
 **Refresh-path prerequisites** (the viewer works without them; the button needs
-them): Claude Code CLI installed and signed in, this plugin installed, and Mail
-automation permission granted. Each Refresh click is a real agent run (a few
+them): Claude Code CLI installed and signed in, and Mail automation permission
+granted. The installer registers this plugin at CLI user scope automatically
+(headless `claude -p` runs use the CLI plugin registry, not the Desktop
+Directory install) — soft-fail, so a missing CLI or network never blocks the
+viewer itself. Each Refresh click is a real agent run (a few
 minutes) — it is a morning brief, not a live dashboard.
