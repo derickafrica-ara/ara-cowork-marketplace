@@ -109,8 +109,21 @@ PS_DIR="${ROOT}/pulse-server"
 PS_STAMP="$HOME/Library/Application Support/ara-pulse-server/.installed-sig"
 if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1 && [ -d "${PS_DIR}" ]; then
   PS_SIG="$(cat "${PS_DIR}/server.py" "${PS_DIR}/install.sh" "${PS_DIR}"/launchd/*.plist 2>/dev/null | shasum | cut -d' ' -f1)"
-  if [ ! -f "${PS_STAMP}" ] || [ "$(cat "${PS_STAMP}")" != "${PS_SIG}" ]; then
-    echo "[ara-business-pulse] Installing the pulse viewer — bookmark http://127.0.0.1:8788" >&2
+  # Healthy = stamp current AND the loaded plist anchored to the DURABLE copy
+  # AND the server actually answering. Any miss -> reinstall (idempotent).
+  # This is the self-heal layer: a stale plugin copy re-pointing the plist, a
+  # deleted Application Support file, or any novel death KeepAlive can't fix
+  # gets repaired at the next session start instead of staying down until a
+  # human notices (incident 2026-07-03). NOTE: the curl means a session opened
+  # while the server is mid-restart may reinstall once — harmless, idempotent.
+  PS_HEALTHY=0
+  if [ -f "${PS_STAMP}" ] && [ "$(cat "${PS_STAMP}")" = "${PS_SIG}" ] && \
+     grep -q "ara-pulse-server/server.py" "$HOME/Library/LaunchAgents/com.ara.pulse-server.plist" 2>/dev/null && \
+     curl -s --max-time 3 -o /dev/null "http://127.0.0.1:8788/status"; then
+    PS_HEALTHY=1
+  fi
+  if [ "${PS_HEALTHY}" -eq 0 ]; then
+    echo "[ara-business-pulse] Installing/repairing the pulse viewer — bookmark http://127.0.0.1:8788" >&2
     PYTHON="${PYABS}" bash "${PS_DIR}/install.sh" --with-morning-run >&2
     mkdir -p "$(dirname "${PS_STAMP}")"
     echo "${PS_SIG}" > "${PS_STAMP}"
