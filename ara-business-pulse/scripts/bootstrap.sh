@@ -100,12 +100,19 @@ fi
 #    Cowork cloud sandbox). Install/refresh only when the files change.
 # ---------------------------------------------------------------------------
 PS_DIR="${ROOT}/pulse-server"
-PS_STAMP="${DATA}/pulse-server.installed"
+# The stamp lives in the DURABLE server dir, NOT ${DATA}: ${DATA} is per plugin
+# SCOPE (Desktop vs CLI-user have separate data dirs), so a per-DATA stamp made
+# every newly-seen scope re-run the installer — re-pointing launchd plists and
+# RESTARTING the server from inside the very headless session the server's own
+# Refresh button spawned (self-kill, observed live 2026-07-03). One durable
+# stamp means all scopes agree the viewer is already installed.
+PS_STAMP="$HOME/Library/Application Support/ara-pulse-server/.installed-sig"
 if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1 && [ -d "${PS_DIR}" ]; then
   PS_SIG="$(cat "${PS_DIR}/server.py" "${PS_DIR}/install.sh" "${PS_DIR}"/launchd/*.plist 2>/dev/null | shasum | cut -d' ' -f1)"
   if [ ! -f "${PS_STAMP}" ] || [ "$(cat "${PS_STAMP}")" != "${PS_SIG}" ]; then
     echo "[ara-business-pulse] Installing the pulse viewer — bookmark http://127.0.0.1:8788" >&2
     PYTHON="${PYABS}" bash "${PS_DIR}/install.sh" --with-morning-run >&2
+    mkdir -p "$(dirname "${PS_STAMP}")"
     echo "${PS_SIG}" > "${PS_STAMP}"
   fi
 fi
