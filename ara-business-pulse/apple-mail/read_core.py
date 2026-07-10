@@ -45,7 +45,10 @@ from config import (
     MAX_READ_BODY_LEN,
     MIN_BODY_CHARS,
     read_allowed_accounts,
+    read_known_senders,
+    read_personal_domains,
     read_run_log_path,
+    sender_is_known,
 )
 
 # --- Paths to the STATIC AppleScript files (never templated) ----------------
@@ -64,6 +67,30 @@ _CUTOFF_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
 # Extract the domain from an account's email address for the allow-list match.
 _EMAIL_DOMAIN_RE = re.compile(r"^[^@\s]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})$")
+
+# Extract a bare email address from a Mail `sender` field, which may be
+# "Display Name <addr@dom>" or a bare "addr@dom". Used ONLY for the personal-
+# account known-senders filter (COND-8 personal scope). Returns "" if none.
+_SENDER_ADDR_RE = re.compile(r"[^<>\s@]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def _extract_sender_address(sender: str) -> str:
+    """Pull the bare email address out of a Mail `sender` field (lower-cased).
+
+    The `sender` field renders as "Display Name <addr@dom>" or a bare "addr@dom".
+    The display name is ATTACKER-CONTROLLED, so when angle brackets are present we
+    trust ONLY the address inside them and never fall back to scanning the display
+    name — otherwise "jane@client.com <evil@phish.com>" would spoof a known sender.
+    The display name may itself contain literal brackets ("<jane@x> <evil@y>"), so
+    we take the LAST <...>: in Mail's `phrase <addr>` rendering the real address is
+    canonically the FINAL bracket pair, and everything before it is display name.
+    Fail-closed: brackets present but empty/garbage inside => "" (message dropped).
+    """
+    s = sender or ""
+    brackets = re.findall(r"<([^<>]*)>", s)
+    candidate = brackets[-1] if brackets else s   # real addr is the LAST <...>
+    m2 = _SENDER_ADDR_RE.search(candidate)
+    return m2.group(0).lower() if m2 else ""
 
 
 class ReadValidationError(ValueError):
@@ -259,7 +286,10 @@ def read_apple_mail(
 
     COND-8: a non-allow-listed account is never passed to the read script — its
     inbox is never enumerated, zero message reads. Fail closed: if the allow-list
-    is empty, NOTHING is read.
+    is empty, NOTHING is read. PERSONAL-scope accounts (read_personal_domains) are
+    additionally filtered to KNOWN SENDERS only (read_known_senders) — the reliable
+    substitute for Apple Mail's non-scriptable "Primary" category; empty
+    known-senders => a personal account contributes zero messages (ships dark).
     COND-5: on osascript timeout/error/Mail-not-running, raises ReadMailError
     (fail loud) after logging — never returns a partial scan as success.
     """
@@ -323,6 +353,13 @@ def read_apple_mail(
 
     results: list[dict] = []
 
+    # Personal-account scope (COND-8 personal-widen): personal-domain accounts are
+    # additionally filtered to KNOWN SENDERS only (the reliable substitute for
+    # Apple Mail's non-scriptable "Primary category"). ARA business accounts read
+    # their full inbox. Fail-closed: empty known-senders => personal reads nothing.
+    personal_domains = set(read_personal_domains())
+    known_senders = read_known_senders()
+
     # Phase 2: read ONLY allow-listed accounts' inboxes (bounded delta).
     for acct in read_accts:
         try:
@@ -342,10 +379,36 @@ def read_apple_mail(
             )
             raise
 
+        is_personal = acct.domain in personal_domains
+
         kept = 0
         skipped_blank = 0
+        skipped_unknown = 0
         for sender, subject, date, body in raw:
             body = body or ""
+            # COND-8 personal scope: for a personal account, drop any message whose
+            # sender is NOT a known sender (the "Primary"-substitute privacy gate).
+            # Applied BEFORE the body is inspected/returned. Fail-closed: an empty
+            # known-senders list drops everything.
+            if is_personal and not sender_is_known(
+                _extract_sender_address(sender), known_senders
+            ):
+                skipped_unknown += 1
+                _log(
+                    {
+                        "event": "read_personal_unknown_sender_skipped",
+                        "account": acct.name,
+                        # C1: log only the sender DOMAIN, never the raw sender or the
+                        # subject — a dropped unknown-personal message may carry
+                        # sensitive content (2FA, medical, financial) in its subject.
+                        "sender_domain": _extract_sender_address(sender).split("@")[-1],
+                        "date": date,
+                        "reason": "personal-scope account; sender not on the "
+                        "known-senders allow-list — skipped (Primary substitute)",
+                    },
+                    log_path,
+                )
+                continue
             # Cached-body integrity: a present message with a blank/partial body
             # is a not-yet-downloaded cached-mode read — skip+log, never return
             # a blank as if it were the real message.
@@ -383,8 +446,10 @@ def read_apple_mail(
                 "event": "read_account_done",
                 "account": acct.name,
                 "domain": acct.domain,
+                "scope": "personal-known-senders" if is_personal else "full-inbox",
                 "messages_returned": kept,
                 "blank_skipped": skipped_blank,
+                "unknown_sender_skipped": skipped_unknown,
             },
             log_path,
         )

@@ -9,9 +9,21 @@ enforced **inside** the MCP server; you override only if a person differs. They 
 
 | What | Where it's read | Default / example | Notes |
 |---|---|---|---|
-| **Read account allow-list** | `APPLE_MAIL_READ_ALLOWED_ACCOUNTS` (MCP env) | `ara-data.com,ARAdata.onmicrosoft.com` | Both ARA domains (R2). Matched on email **domain**, not display name. Empty/garbage ⇒ read nothing (fail closed). A personal account is skipped automatically. |
-| **From-account allow-list (sender)** | `APPLE_MAIL_DRAFT_FROM_ACCOUNTS` (MCP env) | `ara-data.com,ARAdata.onmicrosoft.com` | Bounds which account a draft can be composed **FROM** — the person's own ARA mailbox(es). `create_apple_mail_draft`'s required `from_account` must be on this list, or the draft is rejected. A nudge is always drafted from the person's own account so it lands in their Drafts and sends from their address. |
-| **Recipient allow-list (drafts)** | `APPLE_MAIL_DRAFT_ALLOWED_DOMAINS` (MCP env) | `ara-data.com` (add `ARAdata.onmicrosoft.com` if drafting for that domain) | Bounds who an injection could ever draft to. Keep conservative. |
+| **Read account allow-list** | `APPLE_MAIL_READ_ALLOWED_ACCOUNTS` (MCP env) | `ara-data.com,ARAdata.onmicrosoft.com,gmail.com,me.com,icloud.com` | The fixed **four-account** COND-8 boundary: two ARA accounts + Gmail + iCloud (iCloud = `me.com`/`icloud.com`). Matched on email **domain**, not display name. Empty/garbage ⇒ read nothing (fail closed). An account not on this list is skipped automatically. |
+| **Personal-scope domains (known-senders filter)** | `APPLE_MAIL_READ_PERSONAL_DOMAINS` (MCP env) | `gmail.com,me.com,icloud.com` | Accounts on these domains are read **only for known senders** (the reliable substitute for Apple Mail's non-scriptable "Primary" category). ARA domains are NOT here, so they read the **full** inbox. **Explicit-empty ⇒ no domain is personal-scope = read personal inboxes in FULL** (deliberate override only — an accidental empty over-reads). |
+| **Known-sender allow-list (personal accounts)** | `APPLE_MAIL_READ_KNOWN_SENDERS` (MCP env) | *(empty — personal mail ships DARK)* | Full addresses and/or bare domains (e.g. `jane@example.com,acme.com`). A personal-account message is kept iff its sender's address OR domain is listed. **Fail-closed: empty ⇒ personal accounts return NOTHING** until populated. This is the switch that turns personal mail ON (Derick's decision — see the R2 note below). |
+| **From-account allow-list (sender)** | `APPLE_MAIL_DRAFT_FROM_ACCOUNTS` (MCP env) | `ara-data.com,ARAdata.onmicrosoft.com` | **Unchanged — ARA business only.** Bounds which account a draft can be composed **FROM** — the person's own ARA mailbox(es). `create_apple_mail_draft`'s required `from_account` must be on this list, or the draft is rejected. A personal account is never a draft sender. |
+| **Recipient allow-list (drafts)** | `APPLE_MAIL_DRAFT_ALLOWED_DOMAINS` (MCP env) | `ara-data.com` (add `ARAdata.onmicrosoft.com` if drafting for that domain) | **Unchanged — ARA business only.** Bounds who an injection could ever draft to. Personal contacts (Gmail/iCloud/iMessage) are never valid nudge recipients. Keep conservative. |
+
+> **R2 / "Primary category" note.** Apple Mail's macOS Categories (Primary /
+> Transactions / Updates / Promotions) are **not exposed to AppleScript** (Mail 16
+> scripting dictionary has no `category` property on the `message` class — verified
+> via `sdef`). So the requested "read only the Primary category for personal
+> accounts" is not directly implementable. The **known-senders filter above is the
+> reliable substitute** (named correspondents in, promo/transactional/2FA/newsletter
+> out) and it matches the iMessage known-contacts rule. It ships **fail-closed
+> (empty ⇒ personal reads nothing)**; populate `APPLE_MAIL_READ_KNOWN_SENDERS` to
+> turn personal mail on. This is Derick's decision to make — see Boris's finding memo.
 
 **Group B — the two per-deployment values: collected by the skill on FIRST RUN,
 not at install.** The skill (SKILL.md Step 0.5) asks for these the first time it

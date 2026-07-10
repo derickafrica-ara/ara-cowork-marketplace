@@ -100,16 +100,62 @@ def run_log_path() -> str:
 # READ path config (COND-8 account allow-list — the privacy control)
 # --------------------------------------------------------------------------- #
 # The read tool reads ONLY accounts whose email-address DOMAIN is on this list.
-# Default = both ARA domains. A personal Gmail/iCloud in the same Mail.app is
-# NOT on the list, so it is skipped entirely (zero message reads). Configurable
-# via APPLE_MAIL_READ_ALLOWED_ACCOUNTS (comma-separated domains).
+# COND-8 boundary (as of the personal-widen feature): an EXPLICIT 4-account
+# allow-list — the two ARA business accounts PLUS Derick's two personal accounts
+# (Gmail + iCloud). iCloud spans two address domains (me.com / icloud.com), so
+# five domains map to the four Mail accounts. The boundary is now "these four
+# accounts, nothing else" — NOT "personal excluded" (that earlier design is
+# intentionally, documentedly reversed). Configurable via
+# APPLE_MAIL_READ_ALLOWED_ACCOUNTS (comma-separated domains).
 #
 # CRITICAL fail-closed semantics differ from the draft allow-list: if the read
 # allow-list is explicitly set to empty/garbage, the read tool reads NOTHING and
 # logs (over-reading is a privacy breach, so the safe default is read-nothing —
-# see memo §1B.4 / COND-8). An UNSET env var falls back to the conservative ARA
-# default (both domains); an explicitly-empty value falls through to read-nothing.
-DEFAULT_READ_ALLOWED_ACCOUNTS: tuple[str, ...] = ("ara-data.com", "aradata.onmicrosoft.com")
+# see memo §1B.4 / COND-8). An UNSET env var falls back to the conservative
+# default (the four accounts); an explicitly-empty value falls through to
+# read-nothing.
+DEFAULT_READ_ALLOWED_ACCOUNTS: tuple[str, ...] = (
+    "ara-data.com",
+    "aradata.onmicrosoft.com",
+    "gmail.com",
+    "me.com",
+    "icloud.com",
+)
+
+# --------------------------------------------------------------------------- #
+# PERSONAL-account read scope (COND-8, personal-widen feature).
+# --------------------------------------------------------------------------- #
+# The two ARA business accounts read their FULL inbox (bounded delta) — unchanged.
+# The two PERSONAL accounts (Gmail + iCloud) are read under an ADDITIONAL,
+# stricter filter: only messages whose SENDER resolves to a KNOWN sender are
+# returned. This is the reliable, script-reachable substitute for Apple Mail's
+# "Primary category" (which the Mail 16 scripting dictionary does NOT expose —
+# no `category` property on the message class; verified via `sdef`), and it
+# matches the iMessage "known contacts only" rule the skill applies to the same
+# personal sources. A domain in this set is "personal scope"; a domain on the
+# read allow-list but NOT here reads its full inbox (the ARA accounts).
+#
+# Configurable via APPLE_MAIL_READ_PERSONAL_DOMAINS (comma-separated domains).
+#   - env UNSET      -> this conservative default (Gmail + iCloud are restricted).
+#   - env SET-empty  -> NO domain is personal-scope. This is the EXPLICIT
+#     "read personal inboxes IN FULL" override — use only if the human has
+#     deliberately decided to drop the known-senders restriction. It is honored
+#     literally (same "explicit-empty is intentional" rule as the draft
+#     from-account list), so an accidental empty over-reads: set it on purpose.
+DEFAULT_PERSONAL_READ_DOMAINS: tuple[str, ...] = ("gmail.com", "me.com", "icloud.com")
+
+# Known-sender allow-list applied to PERSONAL-scope accounts only. Each entry is
+# a full address (e.g. "jane@example.com") or a bare DOMAIN (e.g. "example.com");
+# a message from a personal account is kept iff its sender's full address OR its
+# sender's domain is listed. Match is case-insensitive.
+#
+# FAIL-CLOSED and INTENTIONAL: the default is EMPTY, which means a personal
+# account contributes ZERO messages until this list is populated — the personal
+# read path ships DARK. Populating it is the human's explicit decision to turn
+# personal mail on (the "Primary" substitute). Configurable via
+# APPLE_MAIL_READ_KNOWN_SENDERS (comma-separated addresses/domains).
+#   - env UNSET or SET-empty -> EMPTY tuple => personal accounts read NOTHING.
+DEFAULT_READ_KNOWN_SENDERS: tuple[str, ...] = ()
 
 # Bounds for the read path (untrusted-body hardening). Bodies longer than this are
 # truncated (and flagged) rather than pulled wholesale into context.
@@ -140,6 +186,50 @@ def read_allowed_accounts() -> tuple[str, ...]:
         return DEFAULT_READ_ALLOWED_ACCOUNTS
     # Explicitly set: honor it literally, including "set to empty" => read nothing.
     return tuple(d.strip().lower() for d in raw.split(",") if d.strip())
+
+
+def read_personal_domains() -> tuple[str, ...]:
+    """Return the domains whose accounts are read under the known-senders filter.
+
+    A domain here is "personal scope" (known-senders-restricted). A read
+    allow-listed domain NOT here reads its full inbox (the ARA accounts).
+
+    Semantics:
+      - env UNSET     -> conservative default (Gmail + iCloud restricted).
+      - env SET-empty -> EMPTY tuple => nothing is personal-scope, i.e. the
+        EXPLICIT "read personal inboxes in full" override (honored literally).
+    """
+    raw = os.environ.get("APPLE_MAIL_READ_PERSONAL_DOMAINS")
+    if raw is None:
+        return DEFAULT_PERSONAL_READ_DOMAINS
+    return tuple(d.strip().lower() for d in raw.split(",") if d.strip())
+
+
+def read_known_senders() -> tuple[str, ...]:
+    """Return the known-sender allow-list applied to PERSONAL-scope accounts.
+
+    Entries are full addresses or bare domains, lower-cased. Fail-closed: env
+    UNSET or SET-empty both yield an EMPTY tuple => personal accounts read
+    NOTHING until this is populated (the personal path ships dark).
+    """
+    raw = os.environ.get("APPLE_MAIL_READ_KNOWN_SENDERS")
+    if raw is None:
+        return DEFAULT_READ_KNOWN_SENDERS
+    return tuple(e.strip().lower() for e in raw.split(",") if e.strip())
+
+
+def sender_is_known(sender_address: str, known: tuple[str, ...]) -> bool:
+    """True iff a personal-account sender is on the known-sender allow-list.
+
+    `sender_address` is a bare email address (already extracted from the Mail
+    `sender` field). Matches if the FULL address is listed OR its DOMAIN is
+    listed. Case-insensitive. An empty allow-list admits nothing (fail-closed).
+    """
+    addr = (sender_address or "").strip().lower()
+    if not addr or "@" not in addr:
+        return False
+    domain = addr.rsplit("@", 1)[1]
+    return addr in known or domain in known
 
 
 def read_run_log_path() -> str:
