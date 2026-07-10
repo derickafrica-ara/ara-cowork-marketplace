@@ -12,6 +12,7 @@ injection-controlled run (Floyd's §2.1, the one residual he "will not hand-wave
 from __future__ import annotations
 
 import os
+import re
 
 # ARA's known contact domains. Default; extend per engagement via the env var.
 DEFAULT_ALLOWED_DOMAINS: tuple[str, ...] = ("ara-data.com",)
@@ -149,13 +150,42 @@ DEFAULT_PERSONAL_READ_DOMAINS: tuple[str, ...] = ("gmail.com", "me.com", "icloud
 # a message from a personal account is kept iff its sender's full address OR its
 # sender's domain is listed. Match is case-insensitive.
 #
+# SOURCE PRIORITY (file first, then env):
+#   1. ~/.ara-business-pulse/known-senders.txt — the durable LOCAL source. The
+#      real list is Derick's personal address book (hundreds of addresses): it
+#      must never live in the git-tracked .mcp.json (privacy: personal contacts
+#      in a repo), and editing the installed .mcp.json is wiped on every
+#      marketplace reinstall. Same local-config dir the skill already uses for
+#      config.json — FileVault-protected, outside git, outside Dropbox.
+#   2. APPLE_MAIL_READ_KNOWN_SENDERS (MCP env) — fallback when the file is
+#      absent/unusable. Unchanged behavior; ships "" => personal stays DARK.
+#
+# The file path is HARDCODED on purpose — it is deliberately NOT configurable
+# via env or any scanned content: a configurable path would let config injection
+# point the privacy filter at an attacker-controlled file.
+#
 # FAIL-CLOSED and INTENTIONAL: the default is EMPTY, which means a personal
-# account contributes ZERO messages until this list is populated — the personal
-# read path ships DARK. Populating it is the human's explicit decision to turn
-# personal mail on (the "Primary" substitute). Configurable via
-# APPLE_MAIL_READ_KNOWN_SENDERS (comma-separated addresses/domains).
+# account contributes ZERO messages until a source is populated — the personal
+# read path ships DARK. Populating a source is the human's explicit decision to
+# turn personal mail on (the "Primary" substitute).
+#   - file absent/unreadable/oversized/empty/no-valid-entry -> fall back to env
+#     (a file error can only NARROW the read, never widen it).
 #   - env UNSET or SET-empty -> EMPTY tuple => personal accounts read NOTHING.
 DEFAULT_READ_KNOWN_SENDERS: tuple[str, ...] = ()
+
+# Durable local known-senders file. HARDCODED — see the block comment above.
+KNOWN_SENDERS_FILE = os.path.expanduser("~/.ara-business-pulse/known-senders.txt")
+
+# Size bound for the known-senders file (untrusted-input hardening, same style as
+# MAX_BODY_LEN). A real 379-address list is ~9 KB; anything past this bound is
+# treated as malformed => ignored (fall back to env), never read into memory.
+MAX_KNOWN_SENDERS_FILE_BYTES = 1_000_000
+
+# A valid known-senders entry AFTER trim+lowercase: a full address
+# ("jane@example.com") or a bare domain ("example.com"). Invalid entries are
+# DROPPED (dropping can only narrow the read); a file with zero valid entries is
+# treated as absent (fall back to env).
+_KNOWN_SENDER_ENTRY_RE = re.compile(r"^(?:[^@\s,]+@)?[a-z0-9.-]+\.[a-z]{2,}$")
 
 # Bounds for the read path (untrusted-body hardening). Bodies longer than this are
 # truncated (and flagged) rather than pulled wholesale into context.
@@ -205,17 +235,69 @@ def read_personal_domains() -> tuple[str, ...]:
     return tuple(d.strip().lower() for d in raw.split(",") if d.strip())
 
 
+def _known_senders_from_file() -> tuple[str, ...] | None:
+    """Parse the HARDCODED local known-senders file. Fail-closed by design.
+
+    Returns None whenever the file cannot be used as a source — absent,
+    unreadable, not valid UTF-8, oversized, empty, or containing no valid
+    entry — and the caller then falls back to the env var. A file problem can
+    therefore only ever NARROW the read (fall back, ultimately dark), never
+    widen it. Entries are comma-separated (newlines tolerated as separators),
+    trimmed, lower-cased; entries that don't look like an address or bare
+    domain are dropped (dropping only narrows).
+    """
+    path = KNOWN_SENDERS_FILE
+    try:
+        if not os.path.isfile(path):
+            return None
+        if os.path.getsize(path) > MAX_KNOWN_SENDERS_FILE_BYTES:
+            return None
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.read()
+    except Exception:
+        # Any read error (permissions, decode, IO) => behave as if absent.
+        return None
+    parts = raw.replace("\r", ",").replace("\n", ",").split(",")
+    entries = tuple(
+        e
+        for e in (p.strip().lower() for p in parts)
+        if e and _KNOWN_SENDER_ENTRY_RE.match(e)
+    )
+    return entries or None
+
+
+def read_known_senders_with_source() -> tuple[tuple[str, ...], str]:
+    """Return (known-senders allow-list, source) for PERSONAL-scope accounts.
+
+    Source priority (see the block comment at DEFAULT_READ_KNOWN_SENDERS):
+      1. "file" — ~/.ara-business-pulse/known-senders.txt (hardcoded path),
+         when it exists and yields at least one valid entry. Env is IGNORED.
+      2. "env"  — APPLE_MAIL_READ_KNOWN_SENDERS, when it yields entries.
+      3. "none" — no usable source => EMPTY tuple => personal reads NOTHING
+         (the personal path ships dark; fail-closed).
+
+    The source tag is for the read run-log (`known_senders_source`) — log the
+    source and COUNT only, never the addresses themselves.
+    """
+    from_file = _known_senders_from_file()
+    if from_file is not None:
+        return from_file, "file"
+    raw = os.environ.get("APPLE_MAIL_READ_KNOWN_SENDERS")
+    if raw is None:
+        return DEFAULT_READ_KNOWN_SENDERS, "none"
+    senders = tuple(e.strip().lower() for e in raw.split(",") if e.strip())
+    return (senders, "env") if senders else (senders, "none")
+
+
 def read_known_senders() -> tuple[str, ...]:
     """Return the known-sender allow-list applied to PERSONAL-scope accounts.
 
-    Entries are full addresses or bare domains, lower-cased. Fail-closed: env
-    UNSET or SET-empty both yield an EMPTY tuple => personal accounts read
-    NOTHING until this is populated (the personal path ships dark).
+    Entries are full addresses or bare domains, lower-cased. File-first (see
+    read_known_senders_with_source), falling back to the env var. Fail-closed:
+    no usable file AND env UNSET or SET-empty => EMPTY tuple => personal
+    accounts read NOTHING (the personal path ships dark).
     """
-    raw = os.environ.get("APPLE_MAIL_READ_KNOWN_SENDERS")
-    if raw is None:
-        return DEFAULT_READ_KNOWN_SENDERS
-    return tuple(e.strip().lower() for e in raw.split(",") if e.strip())
+    return read_known_senders_with_source()[0]
 
 
 def sender_is_known(sender_address: str, known: tuple[str, ...]) -> bool:

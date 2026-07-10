@@ -45,7 +45,7 @@ from config import (
     MAX_READ_BODY_LEN,
     MIN_BODY_CHARS,
     read_allowed_accounts,
-    read_known_senders,
+    read_known_senders_with_source,
     read_personal_domains,
     read_run_log_path,
     sender_is_known,
@@ -358,7 +358,20 @@ def read_apple_mail(
     # Apple Mail's non-scriptable "Primary category"). ARA business accounts read
     # their full inbox. Fail-closed: empty known-senders => personal reads nothing.
     personal_domains = set(read_personal_domains())
-    known_senders = read_known_senders()
+    known_senders, known_senders_source = read_known_senders_with_source()
+
+    # Audit trail for the personal privacy filter: WHICH source the known-senders
+    # list came from (file | env | none) and the COUNT only — NEVER the addresses
+    # themselves (same C1 discipline as the unknown-sender skip log: personal
+    # contacts must not leak into the run-log).
+    _log(
+        {
+            "event": "read_known_senders_resolved",
+            "known_senders_source": known_senders_source,
+            "known_senders_count": len(known_senders),
+        },
+        log_path,
+    )
 
     # Phase 2: read ONLY allow-listed accounts' inboxes (bounded delta).
     for acct in read_accts:
