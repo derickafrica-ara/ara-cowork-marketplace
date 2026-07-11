@@ -145,6 +145,14 @@ DEFAULT_READ_ALLOWED_ACCOUNTS: tuple[str, ...] = (
 #     from-account list), so an accidental empty over-reads: set it on purpose.
 DEFAULT_PERSONAL_READ_DOMAINS: tuple[str, ...] = ("gmail.com", "me.com", "icloud.com")
 
+# WS2 — FIRST-RUN look-back for PERSONAL-domain accounts only. On the very first
+# run (no prior run-state), personal accounts read a bounded window of this many
+# days instead of the normal since-last-run cutoff. This bounds the first-run
+# personal enumeration — the highest-timeout-risk moment (a large iCloud inbox) —
+# while still giving useful first-run personal context. ARA business accounts are
+# unaffected (they always use the normal cutoff).
+FIRST_RUN_PERSONAL_LOOKBACK_DAYS = 3
+
 # Known-sender allow-list applied to PERSONAL-scope accounts only. Each entry is
 # a full address (e.g. "jane@example.com") or a bare DOMAIN (e.g. "example.com");
 # a message from a personal account is kept iff its sender's full address OR its

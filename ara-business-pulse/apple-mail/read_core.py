@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import (
+    FIRST_RUN_PERSONAL_LOOKBACK_DAYS,
     MAX_READ_BODY_LEN,
     MIN_BODY_CHARS,
     read_allowed_accounts,
@@ -314,6 +315,15 @@ def _write_scan_status(
         pass  # the marker is a backstop; never let its write error fail the read
 
 
+def _first_run_personal_cutoff() -> str:
+    """WS2: first-run look-back cutoff for PERSONAL-domain accounts — now minus
+    FIRST_RUN_PERSONAL_LOOKBACK_DAYS, in the exact AppleScript cutoff shape. Bounds
+    the first-run personal enumeration (the highest-timeout-risk moment); ARA
+    business accounts never use this (they always use the normal cutoff)."""
+    since = _dt.datetime.now() - _dt.timedelta(days=FIRST_RUN_PERSONAL_LOOKBACK_DAYS)
+    return since.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+
 # --------------------------------------------------------------------------- #
 # read_apple_mail — the one orchestrated read operation.
 #   list accounts -> COND-8 allow-list filter (BEFORE any message read)
@@ -325,6 +335,7 @@ def read_apple_mail(
     driver: ReadMailDriver | None = None,
     log_path: str | None = None,
     status_path: str | None = None,
+    first_run: bool = False,
 ) -> dict:
     """Return new messages since `since_iso` from ALLOW-LISTED accounts only.
 
@@ -337,6 +348,8 @@ def read_apple_mail(
         log_path:  read run-log path override.
         status_path: last-scan integrity-marker path override (the viewer reads
                    this to render the partial-scan banner structurally).
+        first_run: WS2 — when True (no prior run-state), PERSONAL-domain accounts
+                   use a bounded 3-day look-back; ARA accounts are unaffected.
 
     Returns a structured result dict:
         {
@@ -361,12 +374,14 @@ def read_apple_mail(
     substitute for Apple Mail's non-scriptable "Primary" category; empty
     known-senders => a personal account contributes zero messages and is skipped
     AT THE ACCOUNT BOUNDARY (its inbox is never enumerated — it "ships dark").
-    COND-5 (max-availability, per Floyd's threat-model ruling): a per-account read
-    TIMEOUT degrades that ONE account (skip + flag partial) instead of aborting the
-    whole scan — but a partial scan is NEVER presented as a clean success (status
-    is "partial" and the failed accounts are named). A TOTAL wipeout (zero accounts
-    succeeded) and any SYSTEMIC error (Mail not running / auth / osascript missing /
-    list_accounts failure) still raise ReadMailError (fail loud). On every completed
+    COND-5 (max-availability): ANY per-account read failure — a 90s TIMEOUT or a
+    pre-timeout STALL surfacing as rc!=0 (e.g. AppleEvent -1712) — degrades that ONE
+    account (skip + flag partial) instead of aborting the whole scan, but a partial
+    scan is NEVER presented as a clean success (status is "partial" and the failed
+    accounts are named). SYSTEMIC conditions still raise ReadMailError (fail loud):
+    a failure at account ENUMERATION (list_accounts — Mail not running / auth /
+    osascript missing) and a TOTAL wipeout (zero accounts succeeded). [WS1 boundary,
+    PENDING Floyd re-ratification.] On every completed
     read the integrity status is ALSO written to a machine-readable marker
     (read_scan_status_path) so the viewer can surface a partial scan BY
     CONSTRUCTION — not by model discretion.
@@ -479,57 +494,57 @@ def read_apple_mail(
 
     results: list[dict] = []
 
+    # WS2: on the FIRST run, PERSONAL-domain accounts use a bounded 3-day look-back
+    # (bounds the highest-timeout-risk enumeration + gives useful first-run personal
+    # context). ARA business accounts always use the normal cutoff — unchanged.
+    personal_cutoff = _first_run_personal_cutoff() if first_run else cutoff
+
     # Phase 2: read ONLY allow-listed accounts' inboxes (bounded delta).
-    # Max-availability (COND-5, per Floyd's ruling): a per-account read TIMEOUT
-    # degrades THAT account (skip + flag) so one slow inbox can't kill the scan; a
-    # SYSTEMIC error still fails loud, and any partial is surfaced below — never
-    # presented as a clean success.
+    # Max-availability (COND-5): a per-account read failure degrades THAT account
+    # (skip + flag PARTIAL) so one slow/stalled inbox can't kill the scan; systemic
+    # conditions and a total wipeout still fail loud, and any partial is surfaced
+    # below — never presented as a clean success.
     accounts_read: list[str] = []
     accounts_failed: list[dict] = []
     for acct in read_accts:
+        is_personal = acct.domain in personal_domains
+        acct_cutoff = personal_cutoff if is_personal else cutoff
         try:
-            raw = driver.read_inbox(acct.name, cutoff)
-        except ReadMailTimeout as exc:
-            # R1: per-account TIMEOUT — isolate, flag prominently, continue. NOT
-            # swallowed: recorded as a failure and surfaced in the returned status
-            # so the human never sees this as a clean scan (COND-5 partial-is-not-
-            # success invariant).
+            raw = driver.read_inbox(acct.name, acct_cutoff)
+        except ReadMailError as exc:
+            # WS1 (per-account failure isolation) — PENDING FLOYD RE-RATIFICATION.
+            # ANY error from a SINGLE account's read_inbox degrades THAT account
+            # (skip + flag PARTIAL): a 90s subprocess TIMEOUT (ReadMailTimeout) OR a
+            # pre-timeout per-account STALL surfacing as rc!=0 (e.g. AppleEvent
+            # -1712). Enumeration (list_accounts, Phase 1) already succeeded, so the
+            # other accounts remain attemptable — this is per-account, not systemic.
+            # SYSTEMIC conditions (Mail not running / auth / osascript missing) surface
+            # at list_accounts (Phase 1 -> fail-loud) or as a TOTAL wipeout (floor
+            # below -> fail-loud). NOT swallowed: recorded + surfaced as PARTIAL so a
+            # partial is never presented as complete (COND-5). NOTE: this REVERSES the
+            # prior "read_inbox rc!=0 -> systemic -> fail-loud" rule at the per-account
+            # level (rc!=0 at list_accounts is still systemic).
+            kind = "timeout" if isinstance(exc, ReadMailTimeout) else "stall"
             accounts_failed.append(
                 {"account": acct.name, "domain": acct.domain, "reason": str(exc)}
             )
             _log(
                 {
-                    "event": "read_account_timeout_degraded",
+                    "event": "read_account_degraded",
                     "account": acct.name,
                     "domain": acct.domain,
+                    "kind": kind,
                     "reason": str(exc),
-                    "alert": "READ TIMED OUT for an allow-listed account — that "
-                    "account is SKIPPED this run and the scan is marked PARTIAL "
-                    "(max-availability). The partial status IS surfaced to the "
-                    "human; it is NOT presented as a complete scan.",
+                    "alert": "READ FAILED for an allow-listed account (per-account "
+                    f"{kind}) — that account is SKIPPED this run and the scan is "
+                    "marked PARTIAL (max-availability). Surfaced to the human; NOT "
+                    "presented as a complete scan.",
                 },
                 log_path,
             )
             continue
-        except ReadMailError as exc:
-            # COND-5: a SYSTEMIC / non-timeout error stays FAIL-LOUD — never
-            # swallowed into a partial success.
-            _log(
-                {
-                    "event": "read_account_failed",
-                    "account": acct.name,
-                    "domain": acct.domain,
-                    "reason": str(exc),
-                    "alert": "READ FAILED (non-timeout) for an allow-listed "
-                    "account — systemic. Failing loud (do not digest a partial "
-                    "scan).",
-                },
-                log_path,
-            )
-            raise
 
         accounts_read.append(acct.name)
-        is_personal = acct.domain in personal_domains
 
         kept = 0
         skipped_blank = 0

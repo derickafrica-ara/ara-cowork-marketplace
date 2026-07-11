@@ -23,13 +23,14 @@ class FakeReadMailDriver(ReadMailDriver):
 
     Fault injection (all optional; empty defaults == the plain FALKE fake):
       - `timeout_accounts`  : read_inbox() on one of these raises ReadMailTimeout,
-        modeling the LIVE DEFECT — a large personal iCloud inbox exceeding the 90s
-        ReadMailDriver timeout. This is the DEGRADABLE fault (max-availability).
+        modeling a large personal inbox exceeding the 90s ReadMailDriver timeout.
+        A per-account DEGRADABLE fault (max-availability).
       - `error_accounts`    : read_inbox() on one of these raises a plain
-        ReadMailError (a SYSTEMIC / non-timeout per-account error), which must stay
-        FAIL-LOUD.
+        ReadMailError modeling a pre-timeout per-account STALL (rc!=0, e.g.
+        AppleEvent -1712). Per WS1 this is now ALSO per-account DEGRADABLE (it is
+        scoped to one account; enumeration already succeeded).
       - `list_accounts_error`: list_accounts() itself raises ReadMailError, modeling
-        a systemic enumeration failure (Mail not running) — must stay FAIL-LOUD.
+        a SYSTEMIC enumeration failure (Mail not running / auth) — stays FAIL-LOUD.
     """
 
     def __init__(
@@ -72,9 +73,10 @@ class FakeReadMailDriver(ReadMailDriver):
                 f"osascript read timed out (modeled) for {account_name!r}"
             )
         if account_name in self._error_accounts:
-            # Systemic / non-timeout per-account error — must stay fail-loud.
+            # Pre-timeout per-account STALL surfacing as rc!=0 (AppleEvent -1712).
             raise ReadMailError(
-                f"osascript read failed (modeled systemic) for {account_name!r}"
+                f"osascript read failed (rc=1): AppleEvent timed out (-1712) "
+                f"for {account_name!r}"
             )
         info = self._world.get(account_name)
         if info is None:

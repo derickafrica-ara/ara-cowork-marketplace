@@ -24,6 +24,7 @@ real 379-sender file (config.KNOWN_SENDERS_FILE is patched to the temp file).
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import sys
@@ -156,7 +157,7 @@ class TestCond5GracefulDegradation(unittest.TestCase):
 
         # The timeout is loudly logged (COND-5 audit; not swallowed).
         events = [e["event"] for e in _read_log(self.log)]
-        self.assertIn("read_account_timeout_degraded", events)
+        self.assertIn("read_account_degraded", events)
 
         # C1a WRITER: the read core wrote the integrity marker (the structural
         # backstop's source of truth pulse-server reads) with the partial status +
@@ -194,21 +195,61 @@ class TestCond5GracefulDegradation(unittest.TestCase):
         with self.assertRaises(ReadMailError):
             read_apple_mail(SINCE, driver=driver, log_path=self.log)
 
-    # --- R4-4b: a non-timeout per-account error still RAISES (only timeouts degrade) --
-    def test_systemic_per_account_error_raises(self):
-        driver = FakeReadMailDriver(_world(), error_accounts={ARA_BIZ})
-        with self.assertRaises(ReadMailError):
-            read_apple_mail(SINCE, driver=driver, log_path=self.log)
+    # --- WS1: a PRE-TIMEOUT per-account STALL (rc!=0 / -1712) now DEGRADES --------
+    def test_per_account_stall_degrades(self):
+        # An account whose read_inbox errors before the 90s timeout (AppleEvent
+        # -1712 / rc!=0) is per-account: degrade it (skip + partial), others return.
+        driver = FakeReadMailDriver(_world(), error_accounts={ARA_M365})
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        self.assertEqual(res["status"], "partial")
+        self.assertIn(ARA_M365, [f["account"] for f in res["accounts_failed"]])
+        self.assertIn(ARA_BIZ, res["accounts_read"])  # other accounts still return
+        # Logged as a per-account degrade with kind="stall" (not fail-loud).
+        degraded = [e for e in _read_log(self.log) if e["event"] == "read_account_degraded"]
+        self.assertTrue(any(e.get("kind") == "stall" for e in degraded))
 
-    # --- N4: timeout account + systemic account => systemic DOMINATES (RAISES) ---
-    def test_timeout_plus_systemic_raises(self):
-        # One account would degrade (timeout) but ANOTHER hits a systemic error:
-        # systemic fail-loud must win — the whole scan raises, never a partial.
+    # --- WS1: a TIMEOUT and a STALL both degrade per-account (mixed) --------------
+    def test_timeout_and_stall_both_degrade(self):
         driver = FakeReadMailDriver(
-            _world(), timeout_accounts={PERSONAL_ICLOUD}, error_accounts={ARA_BIZ}
+            _world(), timeout_accounts={PERSONAL_ICLOUD}, error_accounts={ARA_M365}
         )
-        with self.assertRaises(ReadMailError):
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        self.assertEqual(res["status"], "partial")
+        failed = {f["account"] for f in res["accounts_failed"]}
+        self.assertEqual(failed, {PERSONAL_ICLOUD, ARA_M365})
+        self.assertIn(ARA_BIZ, res["accounts_read"])  # the survivor still returns
+
+    # --- WS1: ALL accounts stall (zero succeed) => still WIPEOUT => RAISE ---------
+    def test_all_accounts_stall_wipeout_raises(self):
+        driver = FakeReadMailDriver(_world(), error_accounts=set(_world().keys()))
+        with self.assertRaises(ReadMailError) as ctx:
             read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        self.assertIn("no account returned", str(ctx.exception))
+
+    # --- WS2: first run => PERSONAL accounts use now-3d; ARA accounts unchanged ---
+    def test_first_run_personal_uses_3day_lookback(self):
+        driver = FakeReadMailDriver(_world())
+        read_apple_mail(SINCE, driver=driver, log_path=self.log, first_run=True)
+        cut = dict(zip(driver.read_calls, driver.read_cutoffs))
+        # ARA business accounts use the normal (passed) cutoff — UNCHANGED.
+        self.assertEqual(cut[ARA_BIZ], SINCE)
+        self.assertEqual(cut[ARA_M365], SINCE)
+        # Personal accounts use now - FIRST_RUN_PERSONAL_LOOKBACK_DAYS (3), not SINCE.
+        expected = _dt.datetime.now() - _dt.timedelta(
+            days=config.FIRST_RUN_PERSONAL_LOOKBACK_DAYS
+        )
+        for acct in (PERSONAL_ICLOUD, PERSONAL_GMAIL):
+            self.assertNotEqual(cut[acct], SINCE)
+            parsed = _dt.datetime.strptime(cut[acct], "%Y-%m-%d %H:%M:%S")
+            self.assertLess(abs((parsed - expected).total_seconds()), 5)
+
+    # --- WS2: a subsequent run (first_run False) => normal window for ALL accounts -
+    def test_subsequent_run_all_accounts_normal_window(self):
+        driver = FakeReadMailDriver(_world())
+        read_apple_mail(SINCE, driver=driver, log_path=self.log)  # first_run defaults False
+        cut = dict(zip(driver.read_calls, driver.read_cutoffs))
+        for acct in (ARA_BIZ, ARA_M365, PERSONAL_ICLOUD, PERSONAL_GMAIL):
+            self.assertEqual(cut[acct], SINCE)
 
     # --- N-B: the marker path is NON-overridable (writer/reader cannot diverge) --
     def test_scan_status_path_not_env_overridable(self):

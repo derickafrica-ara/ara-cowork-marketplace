@@ -97,6 +97,7 @@ def create_apple_mail_draft(
 def read_apple_mail(
     since_iso: str,
     accounts: list[str] | None = None,
+    first_run: bool = False,
 ) -> dict:
     """Read NEW messages since a cutoff from ALLOW-LISTED Apple Mail accounts only.
 
@@ -117,19 +118,23 @@ def read_apple_mail(
         mailbox of every account.
       - A message with a blank/partial (not-yet-downloaded) body is skipped and
         logged, never returned as a blank.
-      - AVAILABILITY vs COND-5: a per-account read TIMEOUT degrades that ONE
-        account (it is skipped and the scan is marked `status: "partial"`) rather
-        than aborting the whole scan — but a partial scan is NEVER presented as a
-        clean one: `status` is `"partial"` and the skipped accounts are named in
-        `accounts_failed`, and the consumer MUST surface that prominently. A TOTAL
-        timeout (zero accounts returned) or a SYSTEMIC error (Mail not running /
-        auth / osascript missing / list_accounts failure) still FAILS LOUD (raises).
+      - AVAILABILITY vs COND-5: ANY per-account read failure — a TIMEOUT or a
+        pre-timeout STALL (rc!=0, e.g. AppleEvent -1712) — degrades that ONE account
+        (it is skipped and the scan is marked `status: "partial"`) rather than
+        aborting the whole scan — but a partial scan is NEVER presented as a clean
+        one: `status` is `"partial"` and the skipped accounts are named in
+        `accounts_failed`, and the consumer MUST surface that prominently. SYSTEMIC
+        conditions still FAIL LOUD (raise): a failure at account ENUMERATION
+        (list_accounts — Mail not running / auth / osascript missing) and a TOTAL
+        wipeout (zero accounts returned).
 
     Args:
         since_iso: ISO-8601 cutoff (e.g. "2026-06-12T06:00:00"); only messages
                    received AFTER this are returned.
         accounts:  optional list of account DOMAINS to narrow the read to. This
                    can only ever INTERSECT the allow-list (narrow, never widen).
+        first_run: pass True ONLY on the first run (no prior run-state) — PERSONAL
+                   accounts then use a bounded 3-day look-back; ARA accounts unchanged.
 
     Returns:
         {
@@ -144,7 +149,9 @@ def read_apple_mail(
         were skipped this run — render that prominently; never as a complete scan.
     """
     try:
-        return _read_apple_mail(since_iso=since_iso, accounts=accounts)
+        return _read_apple_mail(
+            since_iso=since_iso, accounts=accounts, first_run=first_run
+        )
     except ReadValidationError as exc:
         # Fail closed: bad cutoff / inputs => nothing read.
         raise ValueError(f"read rejected (validation): {exc}") from exc
