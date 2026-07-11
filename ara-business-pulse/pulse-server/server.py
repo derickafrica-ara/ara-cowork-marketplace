@@ -182,37 +182,80 @@ def _pulse_run_token(page_html: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
+# --- Anna's on-brand banner styling, inlined for SELF-CONTAINED injection -------
+# The served HTML gets the banner prepended into an arbitrary pulse, so the styling
+# is INLINE (no dependency on the pulse's <style>, no <script>, no external assets —
+# CSP-safe under style-src 'unsafe-inline'). This mirrors the class-based
+# .scan-banner block Anna added to reference/digest-template.html for the inline
+# (model-rendered) pulse. FUNCTIONAL alert palette held outside the brand-orange
+# rule: RED #A4161A (edge/account-chip #6E0D10), AMBER #8A5A00 (edge #5C3C00), white
+# type; IBM Plex Sans body + IBM Plex Mono status code/account chip (system
+# fallbacks). NOTE: the AMBER #8A5A00-vs-brand-orange functional-color exception is
+# flagged for Floyd's conscious sign-off.
+_BANNER_BASE = (
+    "position:sticky;top:0;z-index:10000;display:flex;align-items:center;"
+    "flex-wrap:wrap;gap:8px 14px;padding:11px 18px;color:#FFFFFF;"
+    "font-family:'IBM Plex Sans','Helvetica Neue',Helvetica,Arial,'Liberation Sans',sans-serif;"
+    "font-size:13px;line-height:1.4;-webkit-print-color-adjust:exact;print-color-adjust:exact;"
+)
+_BANNER_CODE = (
+    "font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;"
+    "font-weight:700;font-size:11px;letter-spacing:0.14em;white-space:nowrap;"
+    "padding:2px 9px;border:1px solid rgba(255,255,255,0.55);border-radius:2px;"
+)
+_BANNER_ACCOUNTS = (
+    "font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;"
+    "font-weight:700;letter-spacing:0.01em;background:#6E0D10;color:#fff;"
+    "padding:2px 8px;border-radius:2px;white-space:normal;"
+)
+
+
 def _incomplete_banner(info: dict) -> str:
-    """Red 'incomplete scan' banner naming the skipped account(s). Built ENTIRELY
-    from the Python-written marker (account name, HTML-escaped) — no model output
-    flows into it, so an injected 'hide the warning' instruction cannot remove it.
-    No script (CSP-safe)."""
+    """RED 'incomplete scan' banner (Anna's styling) naming the skipped account(s).
+    Built ENTIRELY from the Python-written marker (account name, HTML-escaped) — no
+    model output flows into it, so an injected 'hide the warning' instruction cannot
+    remove it and the account name cannot smuggle markup. No script (CSP-safe).
+    Load-bearing (asserted): id="pulse-scan-warning", the string "INCOMPLETE SCAN",
+    and the escaped account name as visible text."""
     failed = info.get("accounts_failed") or []
     names = ", ".join(
         html.escape(str(f.get("account", "?"))) for f in failed if isinstance(f, dict)
     ) or "one or more accounts"
     return (
-        '<div id="pulse-scan-warning" style="position:sticky;top:0;z-index:10000;'
-        "padding:10px 16px;background:#B00020;color:#fff;font:bold 13px "
-        "'Helvetica Neue',Arial,sans-serif;border-bottom:3px solid #7a0016;\">"
-        "&#9888; INCOMPLETE SCAN — this pulse is MISSING mail from: "
-        f"{names}. That account timed out and was skipped this run; treat the "
-        "pulse below as PARTIAL.</div>"
+        f'<div id="pulse-scan-warning" role="alert" style="{_BANNER_BASE}'
+        'background:#A4161A;border-left:6px solid #6E0D10;border-bottom:3px solid #6E0D10;">'
+        '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" '
+        'focusable="false" style="display:block;flex:0 0 auto;">'
+        '<path d="M12 2.8 L21.6 20.4 L2.4 20.4 Z" fill="#fff"/>'
+        '<line x1="12" y1="9.2" x2="12" y2="14.4" stroke="#A4161A" stroke-width="2.2" '
+        'stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.25" fill="#A4161A"/></svg>'
+        f'<span style="{_BANNER_CODE}">INCOMPLETE SCAN</span>'
+        '<span style="font-weight:500;"><strong style="font-weight:700;">This pulse is '
+        f'missing mail from</strong> <span style="{_BANNER_ACCOUNTS}">{names}</span>. '
+        "That account timed out and was skipped this run &mdash; treat the pulse below "
+        "as partial.</span></div>"
     )
 
 
 def _neutral_banner() -> str:
-    """Amber 'scan status unknown' banner. N-A: this is the AUTHORITATIVE
-    completeness surface, so it must NEVER imply 'complete' when it cannot confirm
-    the served pulse matches the scan-status marker — say so instead of staying
-    silent. This is the default on ANY uncertainty."""
+    """AMBER 'scan status unknown' banner (Anna's styling). N-A: this is the
+    AUTHORITATIVE completeness surface, so it must NEVER imply 'complete' when it
+    cannot confirm the served pulse matches the marker — say so instead of staying
+    silent. Default on ANY uncertainty. Load-bearing (asserted): id and the string
+    "SCAN STATUS UNKNOWN". No script (CSP-safe)."""
     return (
-        '<div id="pulse-scan-warning" style="position:sticky;top:0;z-index:10000;'
-        "padding:10px 16px;background:#8A5A00;color:#fff;font:bold 13px "
-        "'Helvetica Neue',Arial,sans-serif;border-bottom:3px solid #5c3c00;\">"
-        "&#9888; SCAN STATUS UNKNOWN for this pulse — treat it as POSSIBLY "
-        "INCOMPLETE (could not confirm this pulse matches the latest scan status)."
-        "</div>"
+        f'<div id="pulse-scan-warning" role="status" style="{_BANNER_BASE}'
+        'background:#8A5A00;border-left:6px solid #5C3C00;border-bottom:3px solid #5C3C00;">'
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true" '
+        'focusable="false" style="display:block;flex:0 0 auto;">'
+        '<path d="M12 3.4 L21 19.4 L3 19.4 Z" fill="none" stroke="#fff" stroke-width="2" '
+        'stroke-linejoin="round"/><line x1="12" y1="9" x2="12" y2="13.6" stroke="#fff" '
+        'stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="16.4" r="1.1" '
+        'fill="#fff"/></svg>'
+        f'<span style="{_BANNER_CODE}">SCAN STATUS UNKNOWN</span>'
+        '<span style="font-weight:500;"><strong style="font-weight:700;">Treat this pulse '
+        "as possibly incomplete.</strong> Couldn&rsquo;t confirm it matches the latest "
+        "scan status.</span></div>"
     )
 
 

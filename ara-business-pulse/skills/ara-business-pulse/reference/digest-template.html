@@ -68,6 +68,21 @@
     /* Type — ARA brand typography (IBM Plex Sans) + humanist body */
     --display: "IBM Plex Sans", "Helvetica Neue", Arial, "Liberation Sans", sans-serif;
     --body:    "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif;
+    /* IBM Plex Mono — the canon's "instrument readout" accent (technical labels
+       only: the scan status code + account identifiers). System-mono fallback so
+       the page needs no web-font load. */
+    --mono:    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* Scan-completeness warning system (COND-5). A FUNCTIONAL alert palette,
+       held deliberately OUTSIDE the brand-orange scarcity rule so it never
+       competes with the dot-cluster signal: red = urgent/alert, amber = caution.
+       Amber is a muted ochre, kept distinct from ARA orange #E2641B. White text
+       clears WCAG AA on both fields. */
+    --warn-red:        #A4161A;  /* RED alert field — #fff 7.8:1 (AA/AAA) */
+    --warn-red-edge:   #6E0D10;  /* RED spine / bottom edge / account chip — #fff 12:1 */
+    --warn-amber:      #8A5A00;  /* AMBER caution field — #fff 5.9:1 (AA) */
+    --warn-amber-edge: #5C3C00;  /* AMBER spine / bottom edge — #fff 10:1 */
+    --warn-fg:         #FFFFFF;
   }
 
   * { box-sizing: border-box; }
@@ -128,6 +143,47 @@
     white-space: nowrap;
   }
   .accent-rule { height: 4px; background: var(--ara-orange); width: 100%; }
+
+  /* ---- SCAN-COMPLETENESS WARNING BANNER (COND-5) ------------------------
+     Prepended at the very TOP of <body>, above the pulse card. Two mutually
+     exclusive states — RED (.is-incomplete) = a mail account timed out / was
+     skipped this run; AMBER (.is-unknown) = completeness could not be confirmed.
+     Only ONE renders, or NEITHER when the scan is confirmed complete. The state
+     is carried by THREE redundant cues — an engineered warning glyph, a mono
+     status label, and the message text — so it NEVER relies on color alone;
+     white text clears WCAG AA on both fields. Structural idiom matches the ARA
+     chrome (flat field, left datum spine, hard 3px bottom edge, mono instrument
+     label). */
+  .scan-banner {
+    position: sticky; top: 0; z-index: 10000;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+    padding: 11px 18px; color: var(--warn-fg);
+    font-family: var(--body); font-size: 13px; line-height: 1.4;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .scan-banner svg { display: block; flex: 0 0 auto; }
+  .scan-banner .code {                       /* mono "instrument" status label */
+    font-family: var(--mono); font-weight: 700; font-size: 11px;
+    letter-spacing: 0.14em; white-space: nowrap;
+    padding: 2px 9px; border: 1px solid rgba(255,255,255,0.55); border-radius: 2px;
+  }
+  .scan-banner .msg { font-weight: 500; }
+  .scan-banner .msg strong { font-weight: 700; }
+  .scan-banner .accounts {                   /* skipped-account slot — names as data */
+    font-family: var(--mono); font-weight: 700; letter-spacing: 0.01em;
+    background: var(--warn-red-edge); color: #fff;
+    padding: 2px 8px; border-radius: 2px; white-space: normal;
+  }
+  .scan-banner.is-incomplete {
+    background: var(--warn-red);
+    border-left: 6px solid var(--warn-red-edge);
+    border-bottom: 3px solid var(--warn-red-edge);
+  }
+  .scan-banner.is-unknown {
+    background: var(--warn-amber);
+    border-left: 6px solid var(--warn-amber-edge);
+    border-bottom: 3px solid var(--warn-amber-edge);
+  }
 
   /* ---- BODY -------------------------------------------------------------- */
   .body { padding: 22px 24px 8px; }
@@ -242,6 +298,48 @@
 </style>
 </head>
 <body>
+
+  <!-- ============================================================================
+       SCAN-COMPLETENESS WARNING BANNER (COND-5) — render AT MOST ONE of the two
+       blocks below, or NEITHER when the scan is confirmed complete. Prepended at
+       the very top of <body>, above the pulse card. Both use the SAME id
+       (pulse-scan-warning) because exactly one is ever emitted to the real page.
+
+       IMPORTANT — this is the model-rendered INLINE copy for the on-screen pulse.
+       The AUTHORITATIVE banner is injected server-side by pulse-server (built from
+       the Python scan marker, so a prompt-injection in scanned mail cannot suppress
+       it). Keep the two versions in visual sync. The literal strings
+       "INCOMPLETE SCAN" / "SCAN STATUS UNKNOWN" and the skipped-account name are
+       LOAD-BEARING (asserted by pulse-server/tests/test_scan_status_banner.py) —
+       restyle freely around them, but do not reword them.
+       ========================================================================= -->
+
+  <!-- STATE: RED — incomplete scan. {{skipped_accounts}} = comma-joined skipped
+       account name(s), HTML-escaped by the server. -->
+  <div id="pulse-scan-warning" class="scan-banner is-incomplete" role="alert">
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 2.8 L21.6 20.4 L2.4 20.4 Z" fill="#fff"/>
+      <line x1="12" y1="9.2" x2="12" y2="14.4" stroke="#A4161A" stroke-width="2.2" stroke-linecap="round"/>
+      <circle cx="12" cy="17.4" r="1.25" fill="#A4161A"/>
+    </svg>
+    <span class="code">INCOMPLETE SCAN</span>
+    <span class="msg"><strong>This pulse is missing mail from</strong>
+      <span class="accounts">{{skipped_accounts}}</span>. That account timed out and
+      was skipped this run &mdash; treat the pulse below as partial.</span>
+  </div>
+
+  <!-- STATE: AMBER — scan status unverified (less severe than RED) -->
+  <div id="pulse-scan-warning" class="scan-banner is-unknown" role="status">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+      <path d="M12 3.4 L21 19.4 L3 19.4 Z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
+      <line x1="12" y1="9" x2="12" y2="13.6" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="12" cy="16.4" r="1.1" fill="#fff"/>
+    </svg>
+    <span class="code">SCAN STATUS UNKNOWN</span>
+    <span class="msg"><strong>Treat this pulse as possibly incomplete.</strong>
+      Couldn&rsquo;t confirm it matches the latest scan status.</span>
+  </div>
+
   <div class="page">
 
     <!-- HEADER BAND -->

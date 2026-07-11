@@ -396,8 +396,14 @@ dollars not adjectives, no filler), specialized for ARA. Structure:
 - **⚠ Scan-status banner (ONLY when degraded)** — if `read_apple_mail` returned
   `status: "partial"`, a prominent banner at the **very top**, above TL;DR: name
   the account(s) that **timed out and were skipped** and that their mail is
-  **missing this run** (so the pulse is not mistaken for complete — COND-5). Omit
-  this element entirely when `status: "ok"`.
+  **missing this run** (so the pulse is not mistaken for complete — COND-5). Use the
+  template's styled banner: emit the `<div class="scan-banner is-incomplete">` block
+  from `reference/digest-template.html` (its `.scan-banner` styling and warning
+  glyph), filling the `.accounts` slot with the skipped account name(s); keep the
+  literal `INCOMPLETE SCAN` label. Omit this element entirely when `status: "ok"`.
+  (This inline banner is BEST-EFFORT and visually mirrors the authoritative,
+  structural banner the 8788 viewer injects; the template's `.is-unknown` variant
+  is the viewer's amber "SCAN STATUS UNKNOWN" state.)
 - **TL;DR** — the single most important thing needing attention today.
 - **① Needs your response** — category 1 above.
 - **② Waiting on a contact (time-sensitive)** — category 2; the time-sensitive/
