@@ -138,6 +138,7 @@ def read_apple_mail(
           "accounts_read": [names read successfully],
           "accounts_failed": [ {"account","domain","reason"}, ... ],  # timed out
           "accounts_skipped_dark": [ {"name","domain"}, ... ],  # ships-dark personal
+          "cutoff": "<normalized cutoff>",  # run token; stamp into the saved pulse
         }
         `status: "partial"` means one or more allow-listed accounts timed out and
         were skipped this run — render that prominently; never as a complete scan.

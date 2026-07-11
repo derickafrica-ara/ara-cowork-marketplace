@@ -120,6 +120,7 @@ read_apple_mail(since_iso: str, accounts: list[str] | None = None)
        "accounts_read": [...],
        "accounts_failed": [ {"account","domain","reason"}, ... ],   # timed-out, skipped
        "accounts_skipped_dark": [ {"name","domain"}, ... ],         # ships-dark personal
+       "cutoff": "<run token>",   # stamp verbatim into the saved pulse (see Step 3)
      }
 ```
 
@@ -406,6 +407,15 @@ fills each morning (same three categories + calendar + tasks computed above; the
 template only gives them the ARA-branded, scannable layout with WAITING-ON-A-
 CONTACT as the visual headline). The **content/structure is fixed by this skill**;
 the template supplies appearance only and never adds steps or capabilities.
+
+**Stamp the scan run token (required).** When you SAVE the pulse HTML file, put an
+HTML comment `<!-- ara-pulse-run: {result["cutoff"]} -->` right after the opening
+`<html>` tag (or anywhere in the file) — copy **`result["cutoff"]` verbatim**, do
+not invent or reformat it. The 8788 viewer uses it to confirm the served pulse
+matches this run's scan-status marker; **without it the viewer shows "SCAN STATUS
+UNKNOWN"** rather than a clean pulse. (This only gates the viewer's clean-vs-unknown
+state — the red INCOMPLETE banner is driven by the marker's status, not this token,
+so the token cannot hide a partial scan.)
 
 ### Step 3.5 — Render the digest as an inline visual artifact
 

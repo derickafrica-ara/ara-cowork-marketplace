@@ -346,6 +346,9 @@ def read_apple_mail(
           "accounts_failed": [ {account, domain, reason}, ... ],  # per-account read
                              #   TIMEOUTS degraded (skipped) this run
           "accounts_skipped_dark": [ {name, domain}, ... ],  # ships-dark personal
+          "cutoff": "<normalized cutoff>",  # RUN TOKEN — matches the status marker;
+                                            # stamp it into the saved pulse so the
+                                            # viewer can correlate marker <-> pulse.
         }
     status is "partial" iff at least one allow-listed account's read TIMED OUT and
     was skipped while others still returned — the caller MUST surface a partial
@@ -405,6 +408,7 @@ def read_apple_mail(
             "accounts_read": [],
             "accounts_failed": [],
             "accounts_skipped_dark": [],
+            "cutoff": cutoff,  # run token: stamp into the saved pulse (viewer correlates)
         }
 
     # Phase 1: enumerate accounts (name + email; NO message read). Fail loud on error.
@@ -644,4 +648,5 @@ def read_apple_mail(
         "accounts_read": accounts_read,
         "accounts_failed": accounts_failed,
         "accounts_skipped_dark": skipped_dark_accts,
+        "cutoff": cutoff,  # run token: stamp into the saved pulse (viewer correlates)
     }

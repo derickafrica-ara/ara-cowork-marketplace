@@ -223,7 +223,8 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
         self.assertEqual(
             set(res),
-            {"status", "messages", "accounts_read", "accounts_failed", "accounts_skipped_dark"},
+            {"status", "messages", "accounts_read", "accounts_failed",
+             "accounts_skipped_dark", "cutoff"},
         )
         self.assertIn(res["status"], ("ok", "partial"))
         self.assertIsInstance(res["messages"], list)
