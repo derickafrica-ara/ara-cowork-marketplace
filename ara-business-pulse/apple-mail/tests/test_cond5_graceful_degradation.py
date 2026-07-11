@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import config  # noqa: E402
-from read_core import ReadMailError, read_apple_mail  # noqa: E402
+from read_core import ReadMailError, _write_scan_status, read_apple_mail  # noqa: E402
 from tests.fakes import FakeReadMailDriver  # noqa: E402
 
 SINCE = "2026-07-11 06:00:00"
@@ -104,24 +104,28 @@ class TestCond5GracefulDegradation(unittest.TestCase):
         fd, self.log = tempfile.mkstemp(suffix=".jsonl")
         os.close(fd)
         os.remove(self.log)
-        # Redirect the last-scan marker to a temp file (never write the real dir).
-        fd, self.status = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        os.remove(self.status)
-        os.environ["APPLE_MAIL_READ_SCAN_STATUS"] = self.status
+        # Redirect the last-scan marker to a temp dir (never write the real dir).
+        # The path is NON-overridable via env now, so patch the module default; the
+        # basename MUST be the real marker name (the N-C clobber guard refuses others).
+        self.status_dir = tempfile.mkdtemp()
+        self.status = os.path.join(self.status_dir, config.SCAN_STATUS_BASENAME)
+        self._status_patch = mock.patch.object(config, "DEFAULT_SCAN_STATUS_FILE", self.status)
+        self._status_patch.start()
 
     def tearDown(self):
         for var in (
             "APPLE_MAIL_READ_ALLOWED_ACCOUNTS",
             "APPLE_MAIL_READ_PERSONAL_DOMAINS",
             "APPLE_MAIL_READ_KNOWN_SENDERS",
-            "APPLE_MAIL_READ_SCAN_STATUS",
         ):
             os.environ.pop(var, None)
         self._file_patch.stop()
+        self._status_patch.stop()
         for p in (self.senders_file, self.log, self.status):
             if os.path.exists(p):
                 os.remove(p)
+        if os.path.isdir(self.status_dir):
+            os.rmdir(self.status_dir)
 
     # --- R4-1 / N1 / N2: DEPLOYED file-source config + personal timeout ---------
     def test_file_source_populated_personal_timeout_degrades_not_dies(self):
@@ -205,6 +209,39 @@ class TestCond5GracefulDegradation(unittest.TestCase):
         )
         with self.assertRaises(ReadMailError):
             read_apple_mail(SINCE, driver=driver, log_path=self.log)
+
+    # --- N-B: the marker path is NON-overridable (writer/reader cannot diverge) --
+    def test_scan_status_path_not_env_overridable(self):
+        env_dir = tempfile.mkdtemp()
+        env_marker = os.path.join(env_dir, config.SCAN_STATUS_BASENAME)  # valid name
+        os.environ["APPLE_MAIL_READ_SCAN_STATUS"] = env_marker
+        try:
+            # The resolver ignores the env entirely (returns the fixed default,
+            # here the patched temp marker) — so it can never diverge from the
+            # reader, which also hard-codes the path.
+            self.assertEqual(config.read_scan_status_path(), self.status)
+            driver = FakeReadMailDriver(_world(), timeout_accounts={PERSONAL_ICLOUD})
+            read_apple_mail(SINCE, driver=driver, log_path=self.log)
+            self.assertTrue(os.path.exists(self.status), "marker written to fixed path")
+            self.assertFalse(os.path.exists(env_marker), "env path must NOT be written")
+        finally:
+            os.environ.pop("APPLE_MAIL_READ_SCAN_STATUS", None)
+            if os.path.exists(env_marker):
+                os.remove(env_marker)
+            os.rmdir(env_dir)
+
+    # --- N-C: clobber guard — a non-marker basename is NEVER written -------------
+    def test_write_scan_status_refuses_non_marker_basename(self):
+        # A path that is NOT the dedicated marker (e.g. the known-senders file) must
+        # never be written — the guard makes clobbering another file impossible.
+        bad = os.path.join(self.status_dir, "known-senders.txt")
+        _write_scan_status("partial", [{"account": "X", "domain": "x"}], SINCE, bad)
+        self.assertFalse(os.path.exists(bad),
+                         "clobber guard must refuse a non-marker basename")
+        # ...while the real marker basename DOES get written.
+        good = os.path.join(self.status_dir, config.SCAN_STATUS_BASENAME)
+        _write_scan_status("partial", [{"account": "X", "domain": "x"}], SINCE, good)
+        self.assertTrue(os.path.exists(good))
 
 
 if __name__ == "__main__":

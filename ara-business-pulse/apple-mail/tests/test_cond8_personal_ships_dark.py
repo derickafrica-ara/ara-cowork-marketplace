@@ -98,24 +98,29 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         fd, self.log = tempfile.mkstemp(suffix=".jsonl")
         os.close(fd)
         os.remove(self.log)
-        # Redirect the last-scan marker to a temp file (never write the real dir).
-        fd, self.status = tempfile.mkstemp(suffix=".json")
-        os.close(fd)
-        os.remove(self.status)
-        os.environ["APPLE_MAIL_READ_SCAN_STATUS"] = self.status
+        # Redirect the last-scan marker to a temp dir (never write the real dir).
+        # The path is NON-overridable via env now, so patch the module default; the
+        # basename MUST be the real marker name (the N-C clobber guard refuses others).
+        self.status_dir = tempfile.mkdtemp()
+        self.status = os.path.join(self.status_dir, config.SCAN_STATUS_BASENAME)
+        self._status_patch = mock.patch.object(config, "DEFAULT_SCAN_STATUS_FILE", self.status)
+        self._status_patch.start()
 
     def tearDown(self):
         for var in (
             "APPLE_MAIL_READ_ALLOWED_ACCOUNTS",
             "APPLE_MAIL_READ_PERSONAL_DOMAINS",
             "APPLE_MAIL_READ_KNOWN_SENDERS",
-            "APPLE_MAIL_READ_SCAN_STATUS",
         ):
             os.environ.pop(var, None)
         self._file_patch.stop()
-        for p in (self.log, self.status):
-            if os.path.exists(p):
-                os.remove(p)
+        self._status_patch.stop()
+        if os.path.exists(self.log):
+            os.remove(self.log)
+        if os.path.exists(self.status):
+            os.remove(self.status)
+        if os.path.isdir(self.status_dir):
+            os.rmdir(self.status_dir)
 
     # --- SC1 + SC2 + SC3: empty known-senders => personal skipped at boundary ---
     def test_personal_empty_known_senders_skipped_at_boundary_not_enumerated(self):

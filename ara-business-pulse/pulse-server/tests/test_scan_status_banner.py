@@ -65,6 +65,12 @@ class TestScanStatusBanner(unittest.TestCase):
         with open(self.pulse, "w", encoding="utf-8") as fh:
             fh.write(html_text)
 
+    def _set_marker_mtime(self, delta):
+        # Set the marker's mtime relative to the served pulse's mtime, so the
+        # freshness comparison (N-A) is deterministic regardless of clock/fs res.
+        pm = os.path.getmtime(self.pulse)
+        os.utime(self.marker, (pm + delta, pm + delta))
+
     # --- C1a + ADVERSARIAL: partial marker => banner in served HTML, unsuppressable
     def test_partial_marker_injects_banner_despite_injection(self):
         self._write_marker(
@@ -85,20 +91,31 @@ class TestScanStatusBanner(unittest.TestCase):
         # The banner sits at the very top: right after <body>, before the pulse <h1>.
         self.assertLess(served.index("pulse-scan-warning"), served.index("Morning pulse"))
 
-    # --- ok marker => NO banner (clean scan renders normally) --------------------
-    def test_ok_marker_no_banner(self):
-        self._write_marker({"status": "ok", "accounts_failed": []})
+    # --- ok + FRESH marker => NO banner (clean scan renders normally) ------------
+    def test_ok_fresh_marker_no_banner(self):
         self._write_pulse(ADVERSARIAL_PULSE)
+        self._write_marker({"status": "ok", "accounts_failed": []})
+        self._set_marker_mtime(+10)  # marker vouches for THIS pulse (fresh)
         served = server._render(NONCE).decode()
         self.assertNotIn("pulse-scan-warning", served)
         self.assertIn("ARA PULSE", served)  # the normal toolbar still renders
 
-    # --- absent/unreadable marker => fail safe: no banner, no crash --------------
-    def test_absent_marker_no_banner_no_crash(self):
+    # --- N-A: ABSENT marker while serving a pulse => NEUTRAL caution (not silent) -
+    def test_absent_marker_shows_neutral_banner(self):
         os.remove(self.marker)  # marker missing entirely
         self._write_pulse(ADVERSARIAL_PULSE)
         served = server._render(NONCE).decode()  # must not raise
-        self.assertNotIn("pulse-scan-warning", served)
+        self.assertIn("pulse-scan-warning", served)
+        self.assertIn("SCAN STATUS UNKNOWN", served)
+        self.assertNotIn("INCOMPLETE SCAN", served)  # neutral, not the red one
+
+    # --- N-A: STALE marker (older than the pulse) => NEUTRAL caution -------------
+    def test_stale_marker_shows_neutral_banner(self):
+        self._write_pulse(ADVERSARIAL_PULSE)
+        self._write_marker({"status": "ok", "accounts_failed": []})
+        self._set_marker_mtime(-10)  # marker older than the pulse => cannot vouch
+        served = server._render(NONCE).decode()
+        self.assertIn("SCAN STATUS UNKNOWN", served)
 
     # --- account name is HTML-escaped (no markup injection via account name) -----
     def test_account_name_is_html_escaped(self):
@@ -112,15 +129,15 @@ class TestScanStatusBanner(unittest.TestCase):
         self.assertNotIn("<script>x</script>", served)   # escaped, not live markup
         self.assertIn("&lt;script&gt;", served)
 
-    # --- _partial_banner unit: partial names account, ok returns "" --------------
-    def test_partial_banner_unit(self):
+    # --- _status_banner unit: partial names account; ok + no pulse => "" ---------
+    def test_status_banner_unit(self):
         self._write_marker(
             {"status": "partial",
              "accounts_failed": [{"account": "ARA M365", "domain": "aradata.onmicrosoft.com"}]}
         )
-        self.assertIn("ARA M365", server._partial_banner())
+        self.assertIn("ARA M365", server._status_banner(None))  # partial => incomplete
         self._write_marker({"status": "ok", "accounts_failed": []})
-        self.assertEqual(server._partial_banner(), "")
+        self.assertEqual(server._status_banner(None), "")       # ok + no pulse => none
 
 
 if __name__ == "__main__":

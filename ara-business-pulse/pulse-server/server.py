@@ -172,15 +172,19 @@ def _scan_status() -> dict:
         return {}
 
 
-def _partial_banner() -> str:
-    """Structural 'incomplete scan' banner (COND-5). Returns banner HTML iff the
-    last read was `status: "partial"`, else "". Built ENTIRELY from the Python-
-    written marker (account name + domain, HTML-escaped) — no model output or
-    scanned content flows into it, so an injected 'hide the warning' instruction in
-    a surviving message cannot remove it. Contains no script (CSP-safe)."""
-    info = _scan_status()
-    if info.get("status") != "partial":
-        return ""
+def _scan_status_mtime():
+    """mtime of the marker, or None if absent/unreadable (used for freshness)."""
+    try:
+        return os.path.getmtime(SCAN_STATUS_PATH)
+    except OSError:
+        return None
+
+
+def _incomplete_banner(info: dict) -> str:
+    """Red 'incomplete scan' banner naming the skipped account(s). Built ENTIRELY
+    from the Python-written marker (account name, HTML-escaped) — no model output
+    flows into it, so an injected 'hide the warning' instruction cannot remove it.
+    No script (CSP-safe)."""
     failed = info.get("accounts_failed") or []
     names = ", ".join(
         html.escape(str(f.get("account", "?"))) for f in failed if isinstance(f, dict)
@@ -195,13 +199,46 @@ def _partial_banner() -> str:
     )
 
 
+def _neutral_banner() -> str:
+    """Amber 'scan status unknown' banner. N-A: this is now the AUTHORITATIVE
+    completeness surface, so it must NEVER imply 'complete' just because the marker
+    is missing or older than the served pulse — say so instead of staying silent."""
+    return (
+        '<div id="pulse-scan-warning" style="position:sticky;top:0;z-index:10000;'
+        "padding:10px 16px;background:#8A5A00;color:#fff;font:bold 13px "
+        "'Helvetica Neue',Arial,sans-serif;border-bottom:3px solid #5c3c00;\">"
+        "&#9888; SCAN STATUS UNKNOWN for this pulse — treat it as POSSIBLY "
+        "INCOMPLETE (the completeness marker is missing or older than this pulse)."
+        "</div>"
+    )
+
+
+def _status_banner(pulse_path) -> str:
+    """The structural scan-completeness banner injected into the SERVED HTML.
+
+    N-A hardening (this 8788 view is the AUTHORITATIVE completeness surface):
+      - status "partial"            -> red INCOMPLETE banner (names accounts).
+      - serving a real pulse but the marker is ABSENT or OLDER than that pulse
+        -> amber SCAN-STATUS-UNKNOWN banner (never imply complete on a bad marker).
+      - marker present, fresh, "ok" -> no banner (clean).
+    """
+    info = _scan_status()
+    if info.get("status") == "partial":
+        return _incomplete_banner(info)
+    if pulse_path is not None:
+        mm = _scan_status_mtime()
+        if mm is None or mm < os.path.getmtime(pulse_path):
+            return _neutral_banner()
+    return ""
+
+
 def _render(nonce: str) -> bytes:
     path = _latest_pulse()
     bar = TOOLBAR.replace("__STAMP__", _stamp(path)).replace("__NONCE__", nonce)
-    # COND-5 structural backstop: prepend the partial-scan banner (or "") ABOVE the
-    # toolbar. It is built from the Python-written marker, so it CANNOT be
+    # COND-5 structural backstop: prepend the scan-completeness banner (or "") ABOVE
+    # the toolbar. It is built from the Python-written marker, so it CANNOT be
     # suppressed by anything the model rendered into the pulse body.
-    chrome = _partial_banner() + bar
+    chrome = _status_banner(path) + bar
     if not path:
         return PLACEHOLDER.replace("__TOOLBAR__", chrome).encode()
     with open(path, encoding="utf-8") as f:

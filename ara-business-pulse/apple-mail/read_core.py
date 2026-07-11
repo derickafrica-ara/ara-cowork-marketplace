@@ -50,6 +50,7 @@ from config import (
     read_run_log_path,
     read_scan_status_path,
     sender_is_known,
+    SCAN_STATUS_BASENAME,
 )
 
 # --- Paths to the STATIC AppleScript files (never templated) ----------------
@@ -292,6 +293,11 @@ def _write_scan_status(
     Records only account name + domain — never message content (C1). Best-effort:
     a marker-write failure must NEVER break or fail the read itself.
     """
+    # N-C clobber guard: the marker is its OWN dedicated file. Refuse to write to
+    # anything whose basename isn't the marker's — so a mispointed path can never
+    # overwrite known-senders.txt / config.json / any other file.
+    if os.path.basename(path) != SCAN_STATUS_BASENAME:
+        return
     payload = {
         "status": status,
         "accounts_failed": [

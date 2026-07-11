@@ -328,7 +328,19 @@ def read_run_log_path() -> str:
 # file and the viewer's config.json.
 DEFAULT_SCAN_STATUS_FILE = os.path.expanduser("~/.ara-business-pulse/last-scan-status.json")
 
+# The marker's dedicated basename. The write refuses any other basename (N-C
+# clobber guard) so a mispointed path can NEVER overwrite known-senders.txt /
+# config.json / any other file.
+SCAN_STATUS_BASENAME = "last-scan-status.json"
+
 
 def read_scan_status_path() -> str:
-    """Return the last-scan-status marker path (env override or default)."""
-    return os.environ.get("APPLE_MAIL_READ_SCAN_STATUS", DEFAULT_SCAN_STATUS_FILE)
+    """Return the last-scan-status marker path — NON-overridable by design.
+
+    Returns the fixed dedicated file (no env override). The writer (read core) and
+    the reader (pulse-server, which hard-codes the IDENTICAL path) must resolve to
+    the SAME location or the partial-scan banner would silently stop working
+    (N-B), and an env-pointable marker write would be a clobber footgun. Kept as a
+    function so the writer has a single resolver.
+    """
+    return DEFAULT_SCAN_STATUS_FILE

@@ -148,6 +148,16 @@ read_apple_mail(since_iso: str, accounts: list[str] | None = None)
   pulse** (Step 3): name the skipped account(s) and that their mail is **missing
   this run**. **Never render a partial scan as if it were complete** — that is the
   COND-5 violation. `status == "ok"` means every attempted account was read.
+- **AUTHORITATIVE completeness surface (accepted-residual decision).** The
+  **8788 served viewer** (`http://127.0.0.1:8788`) is the **single source of truth**
+  for whether a scan was complete: its INCOMPLETE-SCAN banner is **structural** —
+  `pulse-server` injects it from the read tool's machine-written status marker, so
+  it is **guaranteed and injection-proof** regardless of what this skill renders.
+  The banner you render on the **in-session inline preview (Step 3.5)** and the
+  **Teams card (Step 6)** is **BEST-EFFORT** (model-rendered) — still do it, but it
+  is **not** the completeness check and must not be relied on as one. If in doubt
+  about whether a pulse was complete, **check the 8788 viewer.** (Derick's decision,
+  ratified at Floyd's gate — a conscious accepted residual, not a gap.)
 
 ### `create_apple_mail_draft(from_account, to, subject, body, cc?)` → draft result
 

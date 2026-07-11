@@ -137,6 +137,19 @@ Then bookmark http://127.0.0.1:8788 — or set it as a Chrome startup page
   origins; concurrent refreshes are refused (409).
 - The optional 7:00 AM weekday run just POSTs to `/refresh` — one code path.
 
+> **Authoritative scan-completeness surface (COND-5).** This 8788 viewer is the
+> **single source of truth** for whether a morning scan was complete. When a mail
+> account times out and is skipped, the read tool writes a status marker and the
+> server injects a **structural INCOMPLETE-SCAN banner** into the served HTML **by
+> construction** — it does not depend on the model choosing to render it, so a
+> prompt-injection in a surviving message cannot suppress it. If the marker is
+> missing or older than the served pulse, the viewer instead shows a **neutral
+> "scan status unknown — treat as possibly incomplete"** banner (it never implies
+> "complete" on a bad marker). The banner on the **in-session inline preview and
+> the Teams card is best-effort** (model-rendered) and is **not** the completeness
+> check — when in doubt, trust this viewer. (Derick's decision, ratified at Floyd's
+> gate — a documented accepted residual.)
+
 > **Accepted residual risk (Floyd gate F2):** an Origin-less local client (any
 > process already running as the user) can still POST `/refresh` and trigger a
 > paid agent run — a denial-of-wallet nuisance, not a data-exposure path; the
