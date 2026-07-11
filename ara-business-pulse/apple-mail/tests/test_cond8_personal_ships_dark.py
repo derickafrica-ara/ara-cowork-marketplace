@@ -232,6 +232,17 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         self.assertIsInstance(res["accounts_failed"], list)
         self.assertIsInstance(res["accounts_skipped_dark"], list)
 
+    # --- WS4: the result is JSON-serializable (closes the MCP-serialization risk) -
+    def test_read_result_is_json_serializable(self):
+        # The MCP layer serializes the return value to JSON. A non-serializable
+        # field would only surface over the wire; assert round-trip here so it can't.
+        os.environ["APPLE_MAIL_READ_KNOWN_SENDERS"] = ""
+        driver = FakeReadMailDriver(_world())
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        round_tripped = json.loads(json.dumps(res))  # must not raise
+        self.assertEqual(set(round_tripped), set(res))
+        self.assertEqual(round_tripped["cutoff"], res["cutoff"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
