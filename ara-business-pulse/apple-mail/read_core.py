@@ -289,7 +289,8 @@ def read_apple_mail(
     is empty, NOTHING is read. PERSONAL-scope accounts (read_personal_domains) are
     additionally filtered to KNOWN SENDERS only (read_known_senders) — the reliable
     substitute for Apple Mail's non-scriptable "Primary" category; empty
-    known-senders => a personal account contributes zero messages (ships dark).
+    known-senders => a personal account contributes zero messages and is skipped
+    AT THE ACCOUNT BOUNDARY (its inbox is never enumerated — it "ships dark").
     COND-5: on osascript timeout/error/Mail-not-running, raises ReadMailError
     (fail loud) after logging — never returns a partial scan as success.
     """
@@ -329,34 +330,14 @@ def read_apple_mail(
         _log({"event": "read_list_accounts_failed", "reason": str(exc)}, log_path)
         raise
 
-    # COND-8 enforcement AT THE ACCOUNT BOUNDARY, before any message is read.
-    read_accts: list[MailAccount] = []
-    skipped_accts: list[dict] = []
-    for acct in all_accounts:
-        domain = acct.domain
-        if domain and domain in allow:
-            read_accts.append(acct)
-        else:
-            skipped_accts.append({"name": acct.name, "email": acct.email, "domain": domain})
-
-    # Audit trail: which accounts were read vs skipped (provable zero personal reads).
-    _log(
-        {
-            "event": "read_accounts_resolved",
-            "allow_list": sorted(allow),
-            "read_accounts": [{"name": a.name, "domain": a.domain} for a in read_accts],
-            "skipped_accounts": skipped_accts,
-            "cutoff": cutoff,
-        },
-        log_path,
-    )
-
-    results: list[dict] = []
-
     # Personal-account scope (COND-8 personal-widen): personal-domain accounts are
     # additionally filtered to KNOWN SENDERS only (the reliable substitute for
     # Apple Mail's non-scriptable "Primary category"). ARA business accounts read
     # their full inbox. Fail-closed: empty known-senders => personal reads nothing.
+    # Resolved BEFORE the account-boundary loop so a personal account whose known-
+    # senders list is empty (and so could only ever contribute zero messages) is
+    # skipped at the boundary rather than enumerated-then-filtered (the ships-dark
+    # skip below).
     personal_domains = set(read_personal_domains())
     known_senders, known_senders_source = read_known_senders_with_source()
 
@@ -372,6 +353,43 @@ def read_apple_mail(
         },
         log_path,
     )
+
+    # COND-8 enforcement AT THE ACCOUNT BOUNDARY, before any message is read.
+    read_accts: list[MailAccount] = []
+    skipped_accts: list[dict] = []
+    skipped_dark_accts: list[dict] = []
+    for acct in all_accounts:
+        domain = acct.domain
+        if not (domain and domain in allow):
+            skipped_accts.append({"name": acct.name, "email": acct.email, "domain": domain})
+            continue
+        # COND-8 personal "ships-dark" (fail-closed): a personal-scope account whose
+        # RESOLVED known-senders list is EMPTY can only ever contribute ZERO messages
+        # (the known-senders filter would drop every message), so skip it AT THE
+        # ACCOUNT BOUNDARY — exactly like a non-allow-listed account — instead of
+        # enumerating its (possibly huge iCloud/Gmail) inbox only to drop everything.
+        # driver.read_inbox() is NEVER called for such an account, so a slow personal
+        # inbox cannot time out and take the whole scan down with it. Fail-closed:
+        # read LESS, never more. Recorded in the account-boundary audit below.
+        if domain in personal_domains and not known_senders:
+            skipped_dark_accts.append({"name": acct.name, "domain": domain})
+            continue
+        read_accts.append(acct)
+
+    # Audit trail: which accounts were read vs skipped (provable zero personal reads).
+    _log(
+        {
+            "event": "read_accounts_resolved",
+            "allow_list": sorted(allow),
+            "read_accounts": [{"name": a.name, "domain": a.domain} for a in read_accts],
+            "skipped_accounts": skipped_accts,
+            "skipped_personal_dark": skipped_dark_accts,
+            "cutoff": cutoff,
+        },
+        log_path,
+    )
+
+    results: list[dict] = []
 
     # Phase 2: read ONLY allow-listed accounts' inboxes (bounded delta).
     for acct in read_accts:
