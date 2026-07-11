@@ -8,7 +8,7 @@ tree and can be ported here if/when draft tests are added to the plugin repo.
 
 from __future__ import annotations
 
-from read_core import MailAccount, ReadMailDriver, ReadMailError
+from read_core import MailAccount, ReadMailDriver, ReadMailError, ReadMailTimeout
 
 
 class FakeReadMailDriver(ReadMailDriver):
@@ -21,25 +21,38 @@ class FakeReadMailDriver(ReadMailDriver):
     ZERO message reads occurred against it. Enforcement happens in read_core
     (the account boundary), BEFORE this driver's read_inbox is ever called.
 
-    `timeout_accounts` (optional) models the LIVE DEFECT this fix targets: any
-    account named here raises ReadMailError when read_inbox() is called on it —
-    the way enumerating a large personal iCloud inbox exceeds the 90s
-    ReadMailDriver timeout and fails loud. It lets a test prove not just that a
-    ships-dark personal account is absent from read_calls, but that the scan
-    would DIE if the boundary skip regressed and that inbox were enumerated.
-    Default (empty set) is identical to the FALKE fake's behavior.
+    Fault injection (all optional; empty defaults == the plain FALKE fake):
+      - `timeout_accounts`  : read_inbox() on one of these raises ReadMailTimeout,
+        modeling the LIVE DEFECT — a large personal iCloud inbox exceeding the 90s
+        ReadMailDriver timeout. This is the DEGRADABLE fault (max-availability).
+      - `error_accounts`    : read_inbox() on one of these raises a plain
+        ReadMailError (a SYSTEMIC / non-timeout per-account error), which must stay
+        FAIL-LOUD.
+      - `list_accounts_error`: list_accounts() itself raises ReadMailError, modeling
+        a systemic enumeration failure (Mail not running) — must stay FAIL-LOUD.
     """
 
-    def __init__(self, world: dict[str, dict], timeout_accounts: set[str] | None = None):
+    def __init__(
+        self,
+        world: dict[str, dict],
+        timeout_accounts: set[str] | None = None,
+        error_accounts: set[str] | None = None,
+        list_accounts_error: bool = False,
+    ):
         super().__init__()
         self._world = world
         self._timeout_accounts = set(timeout_accounts or ())
+        self._error_accounts = set(error_accounts or ())
+        self._list_accounts_error = list_accounts_error
         self.list_accounts_calls = 0
         self.read_calls: list[str] = []  # account names read_inbox was called on
         self.read_cutoffs: list[str] = []
 
     def list_accounts(self):  # type: ignore[override]
         self.list_accounts_calls += 1
+        if self._list_accounts_error:
+            # Systemic enumeration failure (e.g. Mail not running) — fail loud.
+            raise ReadMailError("osascript list_accounts failed (modeled)")
         return [
             MailAccount(name=name, email=info.get("email", ""))
             for name, info in self._world.items()
@@ -51,11 +64,17 @@ class FakeReadMailDriver(ReadMailDriver):
         self.read_cutoffs.append(cutoff)
         if account_name in self._timeout_accounts:
             # Model the live defect: enumerating this (large personal) inbox
-            # exceeds the ReadMailDriver timeout and fails loud (COND-5). If the
-            # boundary skip regresses and this account is enumerated, the whole
-            # scan dies right here — exactly the bug this fix removes.
-            raise ReadMailError(
+            # exceeds the ReadMailDriver timeout. Raising the TIMEOUT subtype lets
+            # read_core degrade this ONE account (max-availability); if the ships-
+            # dark boundary skip regresses and this account is enumerated, the test
+            # still catches it via read_calls.
+            raise ReadMailTimeout(
                 f"osascript read timed out (modeled) for {account_name!r}"
+            )
+        if account_name in self._error_accounts:
+            # Systemic / non-timeout per-account error — must stay fail-loud.
+            raise ReadMailError(
+                f"osascript read failed (modeled systemic) for {account_name!r}"
             )
         info = self._world.get(account_name)
         if info is None:

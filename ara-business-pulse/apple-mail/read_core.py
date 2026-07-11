@@ -104,6 +104,19 @@ class ReadMailError(RuntimeError):
     """
 
 
+class ReadMailTimeout(ReadMailError):
+    """A per-account read exceeded the driver timeout.
+
+    A distinct subtype so the orchestrator can apply the max-availability policy:
+    a per-account read TIMEOUT is DEGRADABLE (skip that ONE account, mark the scan
+    partial, keep the accounts that did return), whereas a non-timeout
+    ReadMailError (Mail not running, auth failure, osascript missing, list_accounts
+    failure) stays FAIL-LOUD (systemic — raise). Degradation NEVER presents a
+    partial scan as a clean success: the partial status is surfaced to the human
+    (COND-5's real invariant).
+    """
+
+
 @dataclass(frozen=True)
 class MailAccount:
     name: str
@@ -199,8 +212,12 @@ class ReadMailDriver:
         except FileNotFoundError as exc:  # osascript missing => not on macOS
             raise ReadMailError(f"osascript not available: {exc}") from exc
         except subprocess.TimeoutExpired as exc:
-            # COND-5: a delta scan that hangs Mail is a silent-miss risk -> loud.
-            raise ReadMailError(
+            # A delta scan that hangs Mail must never silently vanish. Raise the
+            # TIMEOUT subtype so the orchestrator can degrade this ONE account
+            # (max-availability) while still surfacing the scan as partial — never
+            # as a clean success (COND-5). Systemic failures stay plain
+            # ReadMailError (below) and remain fully fail-loud.
+            raise ReadMailTimeout(
                 f"osascript read timed out after {self.timeout}s "
                 f"(Mail may be stalled / mailbox too large): {exc}"
             ) from exc
@@ -271,7 +288,7 @@ def read_apple_mail(
     accounts=None,
     driver: ReadMailDriver | None = None,
     log_path: str | None = None,
-) -> list[dict]:
+) -> dict:
     """Return new messages since `since_iso` from ALLOW-LISTED accounts only.
 
     Args:
@@ -282,7 +299,18 @@ def read_apple_mail(
         driver:    injectable ReadMailDriver (tests pass a fake).
         log_path:  read run-log path override.
 
-    Returns a list of {account, sender, subject, date, body} dicts.
+    Returns a structured result dict:
+        {
+          "status": "ok" | "partial",
+          "messages": [ {account, sender, subject, date, body}, ... ],
+          "accounts_read":   [account names read successfully this run],
+          "accounts_failed": [ {account, domain, reason}, ... ],  # per-account read
+                             #   TIMEOUTS degraded (skipped) this run
+          "accounts_skipped_dark": [ {name, domain}, ... ],  # ships-dark personal
+        }
+    status is "partial" iff at least one allow-listed account's read TIMED OUT and
+    was skipped while others still returned — the caller MUST surface a partial
+    scan PROMINENTLY (never render it as a complete pulse). "ok" otherwise.
 
     COND-8: a non-allow-listed account is never passed to the read script — its
     inbox is never enumerated, zero message reads. Fail closed: if the allow-list
@@ -291,8 +319,12 @@ def read_apple_mail(
     substitute for Apple Mail's non-scriptable "Primary" category; empty
     known-senders => a personal account contributes zero messages and is skipped
     AT THE ACCOUNT BOUNDARY (its inbox is never enumerated — it "ships dark").
-    COND-5: on osascript timeout/error/Mail-not-running, raises ReadMailError
-    (fail loud) after logging — never returns a partial scan as success.
+    COND-5 (max-availability, per Floyd's threat-model ruling): a per-account read
+    TIMEOUT degrades that ONE account (skip + flag partial) instead of aborting the
+    whole scan — but a partial scan is NEVER presented as a clean success (status
+    is "partial" and the failed accounts are named). A TOTAL wipeout (zero accounts
+    succeeded) and any SYSTEMIC error (Mail not running / auth / osascript missing /
+    list_accounts failure) still raise ReadMailError (fail loud).
     """
     driver = driver or ReadMailDriver()
 
@@ -321,7 +353,13 @@ def read_apple_mail(
             },
             log_path,
         )
-        return []
+        return {
+            "status": "ok",
+            "messages": [],
+            "accounts_read": [],
+            "accounts_failed": [],
+            "accounts_skipped_dark": [],
+        }
 
     # Phase 1: enumerate accounts (name + email; NO message read). Fail loud on error.
     try:
@@ -392,24 +430,55 @@ def read_apple_mail(
     results: list[dict] = []
 
     # Phase 2: read ONLY allow-listed accounts' inboxes (bounded delta).
+    # Max-availability (COND-5, per Floyd's ruling): a per-account read TIMEOUT
+    # degrades THAT account (skip + flag) so one slow inbox can't kill the scan; a
+    # SYSTEMIC error still fails loud, and any partial is surfaced below — never
+    # presented as a clean success.
+    accounts_read: list[str] = []
+    accounts_failed: list[dict] = []
     for acct in read_accts:
         try:
             raw = driver.read_inbox(acct.name, cutoff)
+        except ReadMailTimeout as exc:
+            # R1: per-account TIMEOUT — isolate, flag prominently, continue. NOT
+            # swallowed: recorded as a failure and surfaced in the returned status
+            # so the human never sees this as a clean scan (COND-5 partial-is-not-
+            # success invariant).
+            accounts_failed.append(
+                {"account": acct.name, "domain": acct.domain, "reason": str(exc)}
+            )
+            _log(
+                {
+                    "event": "read_account_timeout_degraded",
+                    "account": acct.name,
+                    "domain": acct.domain,
+                    "reason": str(exc),
+                    "alert": "READ TIMED OUT for an allow-listed account — that "
+                    "account is SKIPPED this run and the scan is marked PARTIAL "
+                    "(max-availability). The partial status IS surfaced to the "
+                    "human; it is NOT presented as a complete scan.",
+                },
+                log_path,
+            )
+            continue
         except ReadMailError as exc:
-            # COND-5: fail loud — do NOT swallow into a partial success.
+            # COND-5: a SYSTEMIC / non-timeout error stays FAIL-LOUD — never
+            # swallowed into a partial success.
             _log(
                 {
                     "event": "read_account_failed",
                     "account": acct.name,
                     "domain": acct.domain,
                     "reason": str(exc),
-                    "alert": "READ FAILED for an allow-listed account — scan is "
-                    "incomplete. Failing loud (do not digest a partial scan).",
+                    "alert": "READ FAILED (non-timeout) for an allow-listed "
+                    "account — systemic. Failing loud (do not digest a partial "
+                    "scan).",
                 },
                 log_path,
             )
             raise
 
+        accounts_read.append(acct.name)
         is_personal = acct.domain in personal_domains
 
         kept = 0
@@ -485,13 +554,45 @@ def read_apple_mail(
             log_path,
         )
 
+    # R3 fail-loud floor: max-availability degrades on per-account TIMEOUTS, but a
+    # TOTAL wipeout — accounts were attempted and EVERY one timed out (zero
+    # succeeded) — is not a scan. Fail loud rather than present emptiness as a
+    # success (COND-5). (An empty attempt set — e.g. all personal ships-dark — is a
+    # legitimate clean-but-empty result, NOT a wipeout.)
+    if accounts_failed and not accounts_read:
+        _log(
+            {
+                "event": "read_total_wipeout",
+                "attempted": [a.name for a in read_accts],
+                "failed": [f["account"] for f in accounts_failed],
+                "alert": "ALL allow-listed account reads timed out (zero returned) "
+                "— failing loud rather than reporting an empty scan as success.",
+            },
+            log_path,
+        )
+        raise ReadMailError(
+            f"all {len(accounts_failed)} allow-listed account read(s) timed out — "
+            "no account returned; failing loud (COND-5: not an empty success)."
+        )
+
+    status = "partial" if accounts_failed else "ok"
+
     _log(
         {
             "event": "read_complete",
-            "accounts_read": [a.name for a in read_accts],
+            "status": status,
+            "accounts_read": accounts_read,
+            "accounts_failed": [f["account"] for f in accounts_failed],
+            "accounts_skipped_dark": [a["name"] for a in skipped_dark_accts],
             "total_messages": len(results),
             "cutoff": cutoff,
         },
         log_path,
     )
-    return results
+    return {
+        "status": status,
+        "messages": results,
+        "accounts_read": accounts_read,
+        "accounts_failed": accounts_failed,
+        "accounts_skipped_dark": skipped_dark_accts,
+    }

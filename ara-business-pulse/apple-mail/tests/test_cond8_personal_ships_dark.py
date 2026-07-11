@@ -119,7 +119,8 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         driver = FakeReadMailDriver(
             _world(), timeout_accounts={PERSONAL_ICLOUD, PERSONAL_GMAIL}
         )
-        results = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        msgs = res["messages"]
 
         # SC1 — read_inbox() was NEVER called for either personal account.
         self.assertNotIn(PERSONAL_ICLOUD, driver.read_calls,
@@ -130,10 +131,13 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         # SC2 — the ARA business accounts WERE read end-to-end and returned.
         self.assertIn(ARA_BIZ, driver.read_calls)
         self.assertIn(ARA_M365, driver.read_calls)
-        self.assertEqual({m["account"] for m in results}, {ARA_BIZ, ARA_M365})
-        self.assertEqual(len(results), 2)
-        for m in results:
+        self.assertEqual({m["account"] for m in msgs}, {ARA_BIZ, ARA_M365})
+        self.assertEqual(len(msgs), 2)
+        for m in msgs:
             self.assertNotIn("personal", m["body"])
+        # Ships-dark is NOT a degradation — no account timed out, so status is ok.
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual(res["accounts_failed"], [])
 
         # SC3 (COND-8 audit) — the boundary decision is recorded: personal accounts
         # under skipped_personal_dark, ARA accounts under read_accounts.
@@ -158,17 +162,19 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         os.environ["APPLE_MAIL_READ_KNOWN_SENDERS"] = "mom@family.net"
 
         driver = FakeReadMailDriver(_world())  # no modeled timeout: reads allowed
-        results = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        msgs = res["messages"]
 
         # The personal accounts ARE enumerated now (skip does not fire).
         self.assertIn(PERSONAL_ICLOUD, driver.read_calls)
         self.assertIn(PERSONAL_GMAIL, driver.read_calls)
 
-        senders = {m["sender"] for m in results}
+        senders = {m["sender"] for m in msgs}
         self.assertIn("mom@family.net", senders)         # known -> kept
         self.assertNotIn("newsletter@promo.com", senders)  # unknown -> dropped
-        # ARA business mail still comes through.
-        self.assertIn(ARA_BIZ, {m["account"] for m in results})
+        # ARA business mail still comes through; clean read (no timeouts) => ok.
+        self.assertIn(ARA_BIZ, {m["account"] for m in msgs})
+        self.assertEqual(res["status"], "ok")
 
         log = _read_log(self.log)
         resolved = next(e for e in log if e["event"] == "read_accounts_resolved")
@@ -184,9 +190,10 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         driver = FakeReadMailDriver(
             _world(), timeout_accounts=set(_world().keys())
         )
-        results = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
 
-        self.assertEqual(results, [], "empty allow-list must read NOTHING")
+        self.assertEqual(res["messages"], [], "empty allow-list must read NOTHING")
+        self.assertEqual(res["status"], "ok")
         self.assertEqual(driver.read_calls, [], "no account may be read when fail-closed")
         # Fail-closed short-circuits BEFORE even enumerating accounts.
         self.assertEqual(driver.list_accounts_calls, 0)

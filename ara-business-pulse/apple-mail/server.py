@@ -97,7 +97,7 @@ def create_apple_mail_draft(
 def read_apple_mail(
     since_iso: str,
     accounts: list[str] | None = None,
-) -> list[dict]:
+) -> dict:
     """Read NEW messages since a cutoff from ALLOW-LISTED Apple Mail accounts only.
 
     The read side of the CoS morning scan. READ-ONLY: it cannot send, draft,
@@ -117,8 +117,13 @@ def read_apple_mail(
         mailbox of every account.
       - A message with a blank/partial (not-yet-downloaded) body is skipped and
         logged, never returned as a blank.
-      - On timeout / Mail-not-running / osascript error it FAILS LOUD (raises) —
-        it never returns a partial scan as if it were complete.
+      - AVAILABILITY vs COND-5: a per-account read TIMEOUT degrades that ONE
+        account (it is skipped and the scan is marked `status: "partial"`) rather
+        than aborting the whole scan — but a partial scan is NEVER presented as a
+        clean one: `status` is `"partial"` and the skipped accounts are named in
+        `accounts_failed`, and the consumer MUST surface that prominently. A TOTAL
+        timeout (zero accounts returned) or a SYSTEMIC error (Mail not running /
+        auth / osascript missing / list_accounts failure) still FAILS LOUD (raises).
 
     Args:
         since_iso: ISO-8601 cutoff (e.g. "2026-06-12T06:00:00"); only messages
@@ -127,8 +132,15 @@ def read_apple_mail(
                    can only ever INTERSECT the allow-list (narrow, never widen).
 
     Returns:
-        A list of {"account", "sender", "subject", "date", "body"} dicts, from
-        allow-listed accounts only.
+        {
+          "status": "ok" | "partial",
+          "messages": [ {"account","sender","subject","date","body"}, ... ],
+          "accounts_read": [names read successfully],
+          "accounts_failed": [ {"account","domain","reason"}, ... ],  # timed out
+          "accounts_skipped_dark": [ {"name","domain"}, ... ],  # ships-dark personal
+        }
+        `status: "partial"` means one or more allow-listed accounts timed out and
+        were skipped this run — render that prominently; never as a complete scan.
     """
     try:
         return _read_apple_mail(since_iso=since_iso, accounts=accounts)
