@@ -317,3 +317,18 @@ def sender_is_known(sender_address: str, known: tuple[str, ...]) -> bool:
 def read_run_log_path() -> str:
     """Return the read run-log path (env override or default)."""
     return os.environ.get("APPLE_MAIL_READ_RUN_LOG", DEFAULT_READ_RUN_LOG)
+
+
+# Machine-readable LAST-SCAN integrity marker (COND-5 structural backstop). The
+# read tool overwrites this each completed read; the pulse viewer (pulse-server)
+# reads it and injects the "incomplete scan" banner into the served HTML BY
+# CONSTRUCTION — so the human-facing partial-scan warning does not depend on the
+# model/skill choosing to render it (a prompt-injection in a surviving message
+# cannot suppress it). Lives in the same local-config dir as the known-senders
+# file and the viewer's config.json.
+DEFAULT_SCAN_STATUS_FILE = os.path.expanduser("~/.ara-business-pulse/last-scan-status.json")
+
+
+def read_scan_status_path() -> str:
+    """Return the last-scan-status marker path (env override or default)."""
+    return os.environ.get("APPLE_MAIL_READ_SCAN_STATUS", DEFAULT_SCAN_STATUS_FILE)

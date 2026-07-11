@@ -48,6 +48,7 @@ from config import (
     read_known_senders_with_source,
     read_personal_domains,
     read_run_log_path,
+    read_scan_status_path,
     sender_is_known,
 )
 
@@ -278,6 +279,35 @@ def _log(entry: dict, path: str | None = None) -> None:
         fh.write(json.dumps(entry) + "\n")
 
 
+def _write_scan_status(
+    status: str, accounts_failed: list[dict], cutoff: str, path: str
+) -> None:
+    """Overwrite the machine-readable LAST-SCAN integrity marker (COND-5 backstop).
+
+    Written DETERMINISTICALLY by the read core on every completed read — NOT by the
+    model/skill. The pulse viewer (pulse-server) reads this marker and injects the
+    "incomplete scan" banner into the served HTML BY CONSTRUCTION when status is
+    "partial", so a prompt-injection in a SURVIVING account's message cannot
+    suppress the human-facing warning (the render is not the model's decision).
+    Records only account name + domain — never message content (C1). Best-effort:
+    a marker-write failure must NEVER break or fail the read itself.
+    """
+    payload = {
+        "status": status,
+        "accounts_failed": [
+            {"account": f["account"], "domain": f["domain"]} for f in accounts_failed
+        ],
+        "cutoff": cutoff,
+        "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+    }
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+    except OSError:
+        pass  # the marker is a backstop; never let its write error fail the read
+
+
 # --------------------------------------------------------------------------- #
 # read_apple_mail — the one orchestrated read operation.
 #   list accounts -> COND-8 allow-list filter (BEFORE any message read)
@@ -288,6 +318,7 @@ def read_apple_mail(
     accounts=None,
     driver: ReadMailDriver | None = None,
     log_path: str | None = None,
+    status_path: str | None = None,
 ) -> dict:
     """Return new messages since `since_iso` from ALLOW-LISTED accounts only.
 
@@ -298,6 +329,8 @@ def read_apple_mail(
                    NARROW, never widen, what may be read. (Defense in depth.)
         driver:    injectable ReadMailDriver (tests pass a fake).
         log_path:  read run-log path override.
+        status_path: last-scan integrity-marker path override (the viewer reads
+                   this to render the partial-scan banner structurally).
 
     Returns a structured result dict:
         {
@@ -324,9 +357,13 @@ def read_apple_mail(
     whole scan — but a partial scan is NEVER presented as a clean success (status
     is "partial" and the failed accounts are named). A TOTAL wipeout (zero accounts
     succeeded) and any SYSTEMIC error (Mail not running / auth / osascript missing /
-    list_accounts failure) still raise ReadMailError (fail loud).
+    list_accounts failure) still raise ReadMailError (fail loud). On every completed
+    read the integrity status is ALSO written to a machine-readable marker
+    (read_scan_status_path) so the viewer can surface a partial scan BY
+    CONSTRUCTION — not by model discretion.
     """
     driver = driver or ReadMailDriver()
+    status_path = status_path or read_scan_status_path()
 
     # Normalize the cutoff (fail closed on garbage) BEFORE any Mail call.
     try:
@@ -353,6 +390,9 @@ def read_apple_mail(
             },
             log_path,
         )
+        # Clear/overwrite the integrity marker: this run read nothing by policy,
+        # which is a clean (not degraded) state — a prior "partial" must not linger.
+        _write_scan_status("ok", [], cutoff, status_path)
         return {
             "status": "ok",
             "messages": [],
@@ -589,6 +629,9 @@ def read_apple_mail(
         },
         log_path,
     )
+    # COND-5 structural backstop: record this scan's integrity status where
+    # pulse-server can inject the partial-scan banner independent of the model.
+    _write_scan_status(status, accounts_failed, cutoff, status_path)
     return {
         "status": status,
         "messages": results,

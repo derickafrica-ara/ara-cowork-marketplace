@@ -104,16 +104,22 @@ class TestCond5GracefulDegradation(unittest.TestCase):
         fd, self.log = tempfile.mkstemp(suffix=".jsonl")
         os.close(fd)
         os.remove(self.log)
+        # Redirect the last-scan marker to a temp file (never write the real dir).
+        fd, self.status = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(self.status)
+        os.environ["APPLE_MAIL_READ_SCAN_STATUS"] = self.status
 
     def tearDown(self):
         for var in (
             "APPLE_MAIL_READ_ALLOWED_ACCOUNTS",
             "APPLE_MAIL_READ_PERSONAL_DOMAINS",
             "APPLE_MAIL_READ_KNOWN_SENDERS",
+            "APPLE_MAIL_READ_SCAN_STATUS",
         ):
             os.environ.pop(var, None)
         self._file_patch.stop()
-        for p in (self.senders_file, self.log):
+        for p in (self.senders_file, self.log, self.status):
             if os.path.exists(p):
                 os.remove(p)
 
@@ -148,6 +154,18 @@ class TestCond5GracefulDegradation(unittest.TestCase):
         events = [e["event"] for e in _read_log(self.log)]
         self.assertIn("read_account_timeout_degraded", events)
 
+        # C1a WRITER: the read core wrote the integrity marker (the structural
+        # backstop's source of truth pulse-server reads) with the partial status +
+        # the skipped account — and NO message content or sender address (C1).
+        with open(self.status, encoding="utf-8") as fh:
+            marker = json.load(fh)
+        self.assertEqual(marker["status"], "partial")
+        self.assertIn(PERSONAL_ICLOUD, [f["account"] for f in marker["accounts_failed"]])
+        raw_marker = json.dumps(marker)
+        self.assertNotIn("known@family.net", raw_marker)  # no sender address
+        self.assertNotIn("known@promo.com", raw_marker)
+        self.assertNotIn("real ara body", raw_marker)     # no message body
+
     # --- R4-2: ARA-business timeout ALSO degrades (max-availability, NOT hardfail) --
     def test_ara_business_timeout_degrades_not_hardfail(self):
         driver = FakeReadMailDriver(_world(), timeout_accounts={ARA_M365})
@@ -175,6 +193,16 @@ class TestCond5GracefulDegradation(unittest.TestCase):
     # --- R4-4b: a non-timeout per-account error still RAISES (only timeouts degrade) --
     def test_systemic_per_account_error_raises(self):
         driver = FakeReadMailDriver(_world(), error_accounts={ARA_BIZ})
+        with self.assertRaises(ReadMailError):
+            read_apple_mail(SINCE, driver=driver, log_path=self.log)
+
+    # --- N4: timeout account + systemic account => systemic DOMINATES (RAISES) ---
+    def test_timeout_plus_systemic_raises(self):
+        # One account would degrade (timeout) but ANOTHER hits a systemic error:
+        # systemic fail-loud must win — the whole scan raises, never a partial.
+        driver = FakeReadMailDriver(
+            _world(), timeout_accounts={PERSONAL_ICLOUD}, error_accounts={ARA_BIZ}
+        )
         with self.assertRaises(ReadMailError):
             read_apple_mail(SINCE, driver=driver, log_path=self.log)
 

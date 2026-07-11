@@ -98,17 +98,24 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         fd, self.log = tempfile.mkstemp(suffix=".jsonl")
         os.close(fd)
         os.remove(self.log)
+        # Redirect the last-scan marker to a temp file (never write the real dir).
+        fd, self.status = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(self.status)
+        os.environ["APPLE_MAIL_READ_SCAN_STATUS"] = self.status
 
     def tearDown(self):
         for var in (
             "APPLE_MAIL_READ_ALLOWED_ACCOUNTS",
             "APPLE_MAIL_READ_PERSONAL_DOMAINS",
             "APPLE_MAIL_READ_KNOWN_SENDERS",
+            "APPLE_MAIL_READ_SCAN_STATUS",
         ):
             os.environ.pop(var, None)
         self._file_patch.stop()
-        if os.path.exists(self.log):
-            os.remove(self.log)
+        for p in (self.log, self.status):
+            if os.path.exists(p):
+                os.remove(p)
 
     # --- SC1 + SC2 + SC3: empty known-senders => personal skipped at boundary ---
     def test_personal_empty_known_senders_skipped_at_boundary_not_enumerated(self):
@@ -199,6 +206,25 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         self.assertEqual(driver.list_accounts_calls, 0)
         events = [e["event"] for e in _read_log(self.log)]
         self.assertIn("read_fail_closed", events)
+
+    # --- N1: the documented return dict-shape contract (in-process smoke) --------
+    def test_read_returns_documented_dict_shape(self):
+        # Closes the return-contract shape at the read core. NOTE: the end-to-end
+        # MCP serialization over the live SDK (server.py -> FastMCP) is NOT covered
+        # here (the read suite runs without the MCP SDK) — that remains a documented
+        # install/first-run follow-up.
+        os.environ["APPLE_MAIL_READ_KNOWN_SENDERS"] = ""  # ships dark, clean read
+        driver = FakeReadMailDriver(_world())
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        self.assertEqual(
+            set(res),
+            {"status", "messages", "accounts_read", "accounts_failed", "accounts_skipped_dark"},
+        )
+        self.assertIn(res["status"], ("ok", "partial"))
+        self.assertIsInstance(res["messages"], list)
+        self.assertIsInstance(res["accounts_read"], list)
+        self.assertIsInstance(res["accounts_failed"], list)
+        self.assertIsInstance(res["accounts_skipped_dark"], list)
 
 
 if __name__ == "__main__":

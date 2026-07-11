@@ -19,6 +19,7 @@ Design constraints (see README + Floyd gate report floyd-gate-pulse-server.md):
 from __future__ import annotations
 
 import glob
+import html
 import json
 import os
 import re
@@ -33,6 +34,12 @@ HOST = "127.0.0.1"
 PORT = 8788
 CONFIG_PATH = os.path.expanduser("~/.ara-business-pulse/config.json")
 REFRESH_LOG = os.path.expanduser("~/Library/Logs/ara-pulse-server/refresh.log")
+# Last-scan integrity marker written by the apple-mail read core (read_core.py /
+# config.read_scan_status_path). COND-5 structural backstop: if the last read was
+# `status: "partial"`, the served HTML gets a prominent "incomplete scan" banner
+# injected HERE, by construction — so a prompt-injection in a surviving message
+# cannot suppress the human-facing warning (the banner is not the model's choice).
+SCAN_STATUS_PATH = os.path.expanduser("~/.ara-business-pulse/last-scan-status.json")
 
 # Only the pulse directory is configurable (config.json key of the same name).
 DEFAULTS = {
@@ -154,16 +161,54 @@ __TOOLBAR__
 </div></body></html>"""
 
 
+def _scan_status() -> dict:
+    """Read the last-scan integrity marker written by the read core. Returns {} on
+    ANY problem (absent / unreadable / not JSON / not a dict) — never raises."""
+    try:
+        with open(SCAN_STATUS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _partial_banner() -> str:
+    """Structural 'incomplete scan' banner (COND-5). Returns banner HTML iff the
+    last read was `status: "partial"`, else "". Built ENTIRELY from the Python-
+    written marker (account name + domain, HTML-escaped) — no model output or
+    scanned content flows into it, so an injected 'hide the warning' instruction in
+    a surviving message cannot remove it. Contains no script (CSP-safe)."""
+    info = _scan_status()
+    if info.get("status") != "partial":
+        return ""
+    failed = info.get("accounts_failed") or []
+    names = ", ".join(
+        html.escape(str(f.get("account", "?"))) for f in failed if isinstance(f, dict)
+    ) or "one or more accounts"
+    return (
+        '<div id="pulse-scan-warning" style="position:sticky;top:0;z-index:10000;'
+        "padding:10px 16px;background:#B00020;color:#fff;font:bold 13px "
+        "'Helvetica Neue',Arial,sans-serif;border-bottom:3px solid #7a0016;\">"
+        "&#9888; INCOMPLETE SCAN — this pulse is MISSING mail from: "
+        f"{names}. That account timed out and was skipped this run; treat the "
+        "pulse below as PARTIAL.</div>"
+    )
+
+
 def _render(nonce: str) -> bytes:
     path = _latest_pulse()
     bar = TOOLBAR.replace("__STAMP__", _stamp(path)).replace("__NONCE__", nonce)
+    # COND-5 structural backstop: prepend the partial-scan banner (or "") ABOVE the
+    # toolbar. It is built from the Python-written marker, so it CANNOT be
+    # suppressed by anything the model rendered into the pulse body.
+    chrome = _partial_banner() + bar
     if not path:
-        return PLACEHOLDER.replace("__TOOLBAR__", bar).encode()
+        return PLACEHOLDER.replace("__TOOLBAR__", chrome).encode()
     with open(path, encoding="utf-8") as f:
-        html = f.read()
-    # Inject the toolbar immediately after the opening <body> tag.
-    injected, n = re.subn(r"(<body[^>]*>)", r"\1" + bar.replace("\\", "\\\\"), html, count=1)
-    return (injected if n else bar + html).encode()
+        page = f.read()
+    # Inject banner+toolbar immediately after the opening <body> tag.
+    injected, n = re.subn(r"(<body[^>]*>)", r"\1" + chrome.replace("\\", "\\\\"), page, count=1)
+    return (injected if n else chrome + page).encode()
 
 
 def _run_refresh() -> None:
