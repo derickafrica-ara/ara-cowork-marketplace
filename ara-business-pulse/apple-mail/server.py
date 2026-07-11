@@ -97,7 +97,6 @@ def create_apple_mail_draft(
 def read_apple_mail(
     since_iso: str,
     accounts: list[str] | None = None,
-    first_run: bool = False,
 ) -> dict:
     """Read NEW messages since a cutoff from ALLOW-LISTED Apple Mail accounts only.
 
@@ -133,8 +132,6 @@ def read_apple_mail(
                    received AFTER this are returned.
         accounts:  optional list of account DOMAINS to narrow the read to. This
                    can only ever INTERSECT the allow-list (narrow, never widen).
-        first_run: pass True ONLY on the first run (no prior run-state) — PERSONAL
-                   accounts then use a bounded 3-day look-back; ARA accounts unchanged.
 
     Returns:
         {
@@ -149,9 +146,7 @@ def read_apple_mail(
         were skipped this run — render that prominently; never as a complete scan.
     """
     try:
-        return _read_apple_mail(
-            since_iso=since_iso, accounts=accounts, first_run=first_run
-        )
+        return _read_apple_mail(since_iso=since_iso, accounts=accounts)
     except ReadValidationError as exc:
         # Fail closed: bad cutoff / inputs => nothing read.
         raise ValueError(f"read rejected (validation): {exc}") from exc

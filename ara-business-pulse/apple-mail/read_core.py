@@ -42,7 +42,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import (
-    FIRST_RUN_PERSONAL_LOOKBACK_DAYS,
     MAX_READ_BODY_LEN,
     MIN_BODY_CHARS,
     read_allowed_accounts,
@@ -315,15 +314,6 @@ def _write_scan_status(
         pass  # the marker is a backstop; never let its write error fail the read
 
 
-def _first_run_personal_cutoff() -> str:
-    """WS2: first-run look-back cutoff for PERSONAL-domain accounts — now minus
-    FIRST_RUN_PERSONAL_LOOKBACK_DAYS, in the exact AppleScript cutoff shape. Bounds
-    the first-run personal enumeration (the highest-timeout-risk moment); ARA
-    business accounts never use this (they always use the normal cutoff)."""
-    since = _dt.datetime.now() - _dt.timedelta(days=FIRST_RUN_PERSONAL_LOOKBACK_DAYS)
-    return since.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
-
-
 # --------------------------------------------------------------------------- #
 # read_apple_mail — the one orchestrated read operation.
 #   list accounts -> COND-8 allow-list filter (BEFORE any message read)
@@ -335,7 +325,6 @@ def read_apple_mail(
     driver: ReadMailDriver | None = None,
     log_path: str | None = None,
     status_path: str | None = None,
-    first_run: bool = False,
 ) -> dict:
     """Return new messages since `since_iso` from ALLOW-LISTED accounts only.
 
@@ -348,8 +337,6 @@ def read_apple_mail(
         log_path:  read run-log path override.
         status_path: last-scan integrity-marker path override (the viewer reads
                    this to render the partial-scan banner structurally).
-        first_run: WS2 — when True (no prior run-state), PERSONAL-domain accounts
-                   use a bounded 3-day look-back; ARA accounts are unaffected.
 
     Returns a structured result dict:
         {
@@ -494,12 +481,9 @@ def read_apple_mail(
 
     results: list[dict] = []
 
-    # WS2: on the FIRST run, PERSONAL-domain accounts use a bounded 3-day look-back
-    # (bounds the highest-timeout-risk enumeration + gives useful first-run personal
-    # context). ARA business accounts always use the normal cutoff — unchanged.
-    personal_cutoff = _first_run_personal_cutoff() if first_run else cutoff
-
-    # Phase 2: read ONLY allow-listed accounts' inboxes (bounded delta).
+    # Phase 2: read ONLY allow-listed accounts' inboxes (bounded delta). All
+    # accounts — personal and business — use the same `cutoff` (the since-last-run
+    # window; 24h on the first run when there is no run-state).
     # Max-availability (COND-5): a per-account read failure degrades THAT account
     # (skip + flag PARTIAL) so one slow/stalled inbox can't kill the scan; systemic
     # conditions and a total wipeout still fail loud, and any partial is surfaced
@@ -508,9 +492,8 @@ def read_apple_mail(
     accounts_failed: list[dict] = []
     for acct in read_accts:
         is_personal = acct.domain in personal_domains
-        acct_cutoff = personal_cutoff if is_personal else cutoff
         try:
-            raw = driver.read_inbox(acct.name, acct_cutoff)
+            raw = driver.read_inbox(acct.name, cutoff)
         except ReadMailError as exc:
             # WS1 (per-account failure isolation) — PENDING FLOYD RE-RATIFICATION.
             # ANY error from a SINGLE account's read_inbox degrades THAT account
@@ -619,25 +602,27 @@ def read_apple_mail(
             log_path,
         )
 
-    # R3 fail-loud floor: max-availability degrades on per-account TIMEOUTS, but a
-    # TOTAL wipeout — accounts were attempted and EVERY one timed out (zero
-    # succeeded) — is not a scan. Fail loud rather than present emptiness as a
-    # success (COND-5). (An empty attempt set — e.g. all personal ships-dark — is a
-    # legitimate clean-but-empty result, NOT a wipeout.)
+    # R3 fail-loud floor: max-availability degrades on per-account failures, but a
+    # TOTAL wipeout — accounts were attempted and EVERY one FAILED (timed out or
+    # stalled; zero succeeded) — is not a scan. Fail loud rather than present
+    # emptiness as a success (COND-5). (An empty attempt set — e.g. all personal
+    # ships-dark — is a legitimate clean-but-empty result, NOT a wipeout.)
     if accounts_failed and not accounts_read:
         _log(
             {
                 "event": "read_total_wipeout",
                 "attempted": [a.name for a in read_accts],
                 "failed": [f["account"] for f in accounts_failed],
-                "alert": "ALL allow-listed account reads timed out (zero returned) "
-                "— failing loud rather than reporting an empty scan as success.",
+                "alert": "ALL allow-listed account reads FAILED (timed out or "
+                "stalled; zero returned) — failing loud rather than reporting an "
+                "empty scan as success.",
             },
             log_path,
         )
         raise ReadMailError(
-            f"all {len(accounts_failed)} allow-listed account read(s) timed out — "
-            "no account returned; failing loud (COND-5: not an empty success)."
+            f"all {len(accounts_failed)} allow-listed account read(s) failed "
+            "(timed out or stalled) — no account returned; failing loud "
+            "(COND-5: not an empty success)."
         )
 
     status = "partial" if accounts_failed else "ok"

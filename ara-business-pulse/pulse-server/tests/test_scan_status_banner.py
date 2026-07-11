@@ -155,6 +155,26 @@ class TestScanStatusBanner(unittest.TestCase):
         self.assertIn("Personal iCloud", served)
         self.assertNotIn("SCAN STATUS UNKNOWN", served)
 
+    # --- microcopy: RED banner pluralizes on the count of skipped accounts -------
+    def test_incomplete_banner_pluralizes(self):
+        self._write_pulse(_pulse_with_token(TOKEN))  # partial short-circuits token
+        self._write_marker(
+            {"status": "partial", "cutoff": TOKEN,
+             "accounts_failed": [{"account": "Personal iCloud", "domain": "icloud.com"}]}
+        )
+        one = server._render(NONCE).decode()
+        self.assertIn("That account timed out and was skipped this run", one)
+        self.assertNotIn("Those accounts", one)
+
+        self._write_marker(
+            {"status": "partial", "cutoff": TOKEN, "accounts_failed": [
+                {"account": "Personal iCloud", "domain": "icloud.com"},
+                {"account": "ARA M365", "domain": "aradata.onmicrosoft.com"}]}
+        )
+        two = server._render(NONCE).decode()
+        self.assertIn("Those accounts timed out and were skipped this run", two)
+        self.assertNotIn("That account timed out", two)
+
     # --- account name is HTML-escaped (no markup injection via account name) -----
     def test_account_name_is_html_escaped(self):
         self._write_marker(

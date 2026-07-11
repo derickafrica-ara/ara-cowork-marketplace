@@ -218,9 +218,16 @@ def _incomplete_banner(info: dict) -> str:
     Load-bearing (asserted): id="pulse-scan-warning", the string "INCOMPLETE SCAN",
     and the escaped account name as visible text."""
     failed = info.get("accounts_failed") or []
-    names = ", ".join(
+    escaped = [
         html.escape(str(f.get("account", "?"))) for f in failed if isinstance(f, dict)
-    ) or "one or more accounts"
+    ]
+    names = ", ".join(escaped) or "one or more accounts"
+    # Pluralize the copy on the count of skipped accounts (Anna's tone/markup kept).
+    tail = (
+        "That account timed out and was skipped this run"
+        if len(escaped) == 1
+        else "Those accounts timed out and were skipped this run"
+    )
     return (
         f'<div id="pulse-scan-warning" role="alert" style="{_BANNER_BASE}'
         'background:#A4161A;border-left:6px solid #6E0D10;border-bottom:3px solid #6E0D10;">'
@@ -232,8 +239,7 @@ def _incomplete_banner(info: dict) -> str:
         f'<span style="{_BANNER_CODE}">INCOMPLETE SCAN</span>'
         '<span style="font-weight:500;"><strong style="font-weight:700;">This pulse is '
         f'missing mail from</strong> <span style="{_BANNER_ACCOUNTS}">{names}</span>. '
-        "That account timed out and was skipped this run &mdash; treat the pulse below "
-        "as partial.</span></div>"
+        f"{tail} &mdash; treat the pulse below as partial.</span></div>"
     )
 
 

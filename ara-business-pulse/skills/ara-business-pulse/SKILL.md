@@ -113,7 +113,7 @@ These are the only two tools that touch mail. Their contracts are fixed by the
 ### `read_apple_mail(since_iso, accounts?)` → scan result (messages + status)
 
 ```
-read_apple_mail(since_iso: str, accounts: list[str] | None = None, first_run: bool = False)
+read_apple_mail(since_iso: str, accounts: list[str] | None = None)
   -> {
        "status": "ok" | "partial",
        "messages": [ {"account","sender","subject","date","body"}, ... ],
@@ -237,13 +237,9 @@ its own known-contacts rule above; it never touches the M365 connector either.)
 Determine `since_iso` = the timestamp of the **last successful run** (read it from
 the run-state file `state/last-run.txt` in the project folder if present;
 otherwise default to **24 hours ago**). This bounds the scan to new mail only —
-do not scan history. Record the new run start time to write back in Step 7.
-
-**First-run flag.** If `state/last-run.txt` is **absent** (this is the first run),
-pass **`first_run=True`** to `read_apple_mail` (Step 1). The tool then caps
-**personal-domain** accounts to a bounded 3-day look-back (ARA accounts unchanged)
-— it bounds the first-run personal enumeration, the highest-timeout-risk moment.
-On every subsequent run leave `first_run` unset (`False`).
+do not scan history. Record the new run start time to write back in Step 7. On the
+first run (no `state/last-run.txt`) this 24h default applies to **all** accounts,
+personal and business alike — there is no special first-run window.
 
 ### Step 0.5 — Load per-deployment config (first-run setup if missing)
 
@@ -317,11 +313,9 @@ of `teams_webhook_url` is what gates Step 6.
 Dispatch these **simultaneously** (latency discipline — same as the baseline
 skill; don't pull serially):
 
-1. **`read_apple_mail(since_iso=<cutoff>, first_run=<true on first run>)`** — new
-   mail across the four-account allow-list since the cutoff. (The tool handles the
-   allow-list: ARA accounts in full, Gmail/iCloud known-senders-only. You never
-   widen it.) Pass `first_run=True` only when `state/last-run.txt` was absent
-   (Step 0) so personal accounts use the bounded 3-day first-run window.
+1. **`read_apple_mail(since_iso=<cutoff>)`** — new mail across the four-account
+   allow-list since the cutoff. (The tool handles the allow-list: ARA accounts in
+   full, Gmail/iCloud known-senders-only. You never widen it.)
 2. **iMessage** — recent messages since the cutoff via the **`Read and Send
    iMessages`** connector (`read_imessages` / `get_unread_imessages`), **READ-ONLY**.
    Resolve each sender to a **named contact** (`search_contacts`); **drop** unknown

@@ -24,7 +24,6 @@ real 379-sender file (config.KNOWN_SENDERS_FILE is patched to the temp file).
 
 from __future__ import annotations
 
-import datetime as _dt
 import json
 import os
 import sys
@@ -226,27 +225,13 @@ class TestCond5GracefulDegradation(unittest.TestCase):
             read_apple_mail(SINCE, driver=driver, log_path=self.log)
         self.assertIn("no account returned", str(ctx.exception))
 
-    # --- WS2: first run => PERSONAL accounts use now-3d; ARA accounts unchanged ---
-    def test_first_run_personal_uses_3day_lookback(self):
+    # --- C-WS2: personal accounts use the SAME cutoff as business (no widening) ---
+    def test_personal_accounts_use_same_cutoff_as_business(self):
+        # The first-run 3-day personal window was dropped: ALL accounts — personal
+        # and business — always read from the SAME passed cutoff (24h default on the
+        # first run). No special-casing, no widening.
         driver = FakeReadMailDriver(_world())
-        read_apple_mail(SINCE, driver=driver, log_path=self.log, first_run=True)
-        cut = dict(zip(driver.read_calls, driver.read_cutoffs))
-        # ARA business accounts use the normal (passed) cutoff — UNCHANGED.
-        self.assertEqual(cut[ARA_BIZ], SINCE)
-        self.assertEqual(cut[ARA_M365], SINCE)
-        # Personal accounts use now - FIRST_RUN_PERSONAL_LOOKBACK_DAYS (3), not SINCE.
-        expected = _dt.datetime.now() - _dt.timedelta(
-            days=config.FIRST_RUN_PERSONAL_LOOKBACK_DAYS
-        )
-        for acct in (PERSONAL_ICLOUD, PERSONAL_GMAIL):
-            self.assertNotEqual(cut[acct], SINCE)
-            parsed = _dt.datetime.strptime(cut[acct], "%Y-%m-%d %H:%M:%S")
-            self.assertLess(abs((parsed - expected).total_seconds()), 5)
-
-    # --- WS2: a subsequent run (first_run False) => normal window for ALL accounts -
-    def test_subsequent_run_all_accounts_normal_window(self):
-        driver = FakeReadMailDriver(_world())
-        read_apple_mail(SINCE, driver=driver, log_path=self.log)  # first_run defaults False
+        read_apple_mail(SINCE, driver=driver, log_path=self.log)
         cut = dict(zip(driver.read_calls, driver.read_cutoffs))
         for acct in (ARA_BIZ, ARA_M365, PERSONAL_ICLOUD, PERSONAL_GMAIL):
             self.assertEqual(cut[acct], SINCE)

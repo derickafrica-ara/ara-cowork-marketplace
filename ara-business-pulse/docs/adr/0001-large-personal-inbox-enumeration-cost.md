@@ -3,7 +3,7 @@
 - **Status:** Proposed (recommendation for Derick + Floyd; no full rework built yet)
 - **Date:** 2026-07-11
 - **Component:** `ara-business-pulse` — `apple-mail/` read path
-- **Related:** WS1 (per-account stall degrade), WS2 (first-run 3-day personal cap)
+- **Related:** WS1 (per-account stall degrade)
 
 ## Context — the root cost
 
@@ -19,7 +19,7 @@ account** it is not: Apple Mail evaluates `whose date received > cutoff` by
 via the Mail scripting bridge), so a large iCloud inbox (tens of thousands of
 messages) takes **~90 seconds** — right at the `ReadMailDriver` 90s timeout. This
 is the original defect that motivated the ships-dark skip, the graceful
-degradation, and now WS1/WS2:
+degradation, and WS1 (per-account degrade):
 
 - Empirically, the full 5-domain allow-list timed out on iCloud at 90s; scoped to
   the two ARA domains it completed in ~67s.
@@ -29,18 +29,20 @@ degradation, and now WS1/WS2:
 So the personal path is both the **highest-latency** and the
 **highest-timeout-risk** part of every run.
 
-## Mitigations already in place (partial)
+## Mitigation already in place (resilience only)
 
-- **WS2 — first-run 3-day personal cap.** On the first run, personal accounts use
-  a bounded `now − 3 days` window. This does **not** remove the enumeration cost
-  (the `whose` filter still walks the inbox), but it bounds the *first* run — the
-  worst moment — and is a cheap, low-risk guard.
 - **WS1 — degrade a per-account stall.** If iCloud stalls/times out, that account
   is skipped and the scan is marked `partial` (surfaced structurally on the 8788
   viewer) instead of killing the whole scan. This is **resilience, not a fix** —
   iCloud still contributes nothing on a slow morning.
 
-Neither addresses the underlying ~90s enumeration. This ADR is about that.
+> A first-run 3-day personal look-back was considered (WS2) but **dropped**: the
+> first-run default is already 24h, so a 3-day window would read *more*, not less,
+> and would **not** reduce the enumeration cost — which is inbox-size-driven, not
+> window-driven. Personal accounts now use the same 24h first-run default as
+> business accounts.
+
+WS1 does not address the underlying ~90s enumeration. This ADR is about that.
 
 ## Options considered
 
