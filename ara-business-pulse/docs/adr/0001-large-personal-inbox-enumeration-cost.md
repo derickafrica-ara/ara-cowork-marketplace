@@ -5,13 +5,17 @@
 - **Component:** `ara-business-pulse` — `apple-mail/` read path
 - **Related:** WS1 (per-account stall degrade)
 
-> **Update (0.3.3):** Option A is now shipped. `read_account.applescript` reads the
-> inbox NEWEST-FIRST by index up to `config.READ_MAX_MESSAGES_PER_ACCOUNT` (500),
-> stopping at the cutoff (complete) or the ceiling (saturated); `read_core` surfaces
-> a saturated account as CAPPED (`accounts_capped`, `status: "partial"`, banner) —
-> never a silent truncation (COND-5). The ~90s enumeration timeout is eliminated in
-> the logic; **the speed win itself is confirmed only by a live run on the large
-> personal inboxes** (mocks can't measure it). Option D (provider API) remains the
+> **Update (0.3.3):** Option A is now shipped. `read_account.applescript` examines
+> the NEWEST `min(total, config.READ_MAX_MESSAGES_PER_ACCOUNT)` (500) messages by
+> index (dates bulk-fetched in one round-trip) and returns EVERY in-window one —
+> ordering-independent, no early stop (R-SAFE, closing the interleaved-message silent
+> drop). `read_core` makes the completeness DECISION in unit-tested Python
+> (`_is_saturated` = examined the full ceiling AND no examined message was out of
+> window) and surfaces a saturated account as CAPPED (`accounts_capped`,
+> `status: "partial"`, banner) — never a silent truncation (COND-5). The ~90s
+> enumeration timeout is eliminated in the logic; **the raw osascript speed and
+> Mail's index-ordering are confirmed only by a live run** (mocks can't measure them
+> — see `scripts/smoke_read_shape.py --live`). Option D (provider API) remains the
 > strategic follow-up behind a Floyd threat-model review.
 
 ## Context — the root cost

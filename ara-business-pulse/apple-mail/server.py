@@ -112,12 +112,13 @@ def read_apple_mail(
         Any other account in Mail (e.g. a personal Gmail/iCloud) is skipped
         ENTIRELY — its inbox is never enumerated, zero messages are read. If the
         allow-list is empty/misconfigured the tool reads NOTHING (fail closed).
-      - It performs a BOUNDED DELTA scan: each allow-listed INBOX is read
-        NEWEST-FIRST by index only until it passes `since_iso` or hits a per-account
-        message CEILING — O(ceiling), never the O(inbox) walk. If the ceiling is hit
-        before passing the cutoff, older in-window mail may be unread: that account
-        is named in `accounts_capped` and the scan is `status: "partial"` (CAPPED —
-        surfaced, never a silent truncation). It never enumerates every mailbox.
+      - It performs a BOUNDED DELTA scan: it examines the NEWEST min(total, CEILING)
+        messages of each allow-listed INBOX by index and returns every in-window one
+        (ordering-independent, no early stop) — O(ceiling), never the O(inbox) walk.
+        If it examined the full ceiling and even the boundary was still in-window,
+        older in-window mail may be unread: that account is named in `accounts_capped`
+        and the scan is `status: "partial"` (CAPPED — surfaced, never a silent
+        truncation). It never enumerates every mailbox.
       - A message with a blank/partial (not-yet-downloaded) body is skipped and
         logged, never returned as a blank.
       - AVAILABILITY vs COND-5: ANY per-account read failure — a TIMEOUT or a

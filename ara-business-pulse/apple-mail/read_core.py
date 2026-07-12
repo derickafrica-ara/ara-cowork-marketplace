@@ -182,6 +182,31 @@ def normalize_cutoff(since_iso: str) -> str:
     return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _to_int(s: str) -> int:
+    """Parse an integer META field; 0 on anything unparseable (defensive)."""
+    try:
+        return int(str(s).strip())
+    except (ValueError, TypeError):
+        return 0
+
+
+def _is_saturated(examined: int, saw_out_of_window: bool, ceiling: int) -> bool:
+    """COND-5 completeness DECISION (ordering-INDEPENDENT; unit-tested).
+
+    The reader examined the newest `examined` = min(total, ceiling) messages by index
+    and collected EVERY in-window one among them, regardless of order (no early stop).
+    So the window is fully covered — the read is COMPLETE — UNLESS BOTH:
+      (a) we examined the full ceiling (there are more messages we did NOT reach), AND
+      (b) NO examined message was out of window (even the boundary is still in-window),
+    in which case in-window mail may exist beyond the ceiling => CAPPED (saturated).
+
+    This kills the false-capped case (a small delta on a huge inbox: saw_out_of_window
+    is True => complete) AND, with the reader's no-early-stop collection, the
+    single-interleave silent drop (an out-of-window message can no longer truncate).
+    """
+    return examined >= ceiling and not saw_out_of_window
+
+
 # --------------------------------------------------------------------------- #
 # ReadMailDriver — the ONLY boundary that touches Mail.app for reading.
 # Mockable for tests. Exposes EXACTLY two read-only operations.
@@ -249,20 +274,22 @@ class ReadMailDriver:
 
     def read_inbox(
         self, account_name: str, cutoff: str
-    ) -> tuple[list[tuple[str, str, str, str]], bool]:
-        """Read ONE named account's inbox, newest-first, bounded by the cutoff AND
-        the per-account message ceiling (config.READ_MAX_MESSAGES_PER_ACCOUNT).
+    ) -> tuple[list[tuple[str, str, str, str]], int, bool, int]:
+        """Read ONE named account's inbox, newest-first: examine the newest
+        min(total, ceiling) messages by index and return EVERY in-window message
+        among them (ordering-independent — NO early stop, so an interleaved
+        out-of-window message cannot truncate the collection).
 
-        Returns (records, saturated):
-          - records:   raw (sender, subject, date, body) tuples for in-window
-                       messages — the AppleScript control-char framing is decoded
-                       here; no filtering/skip logic (that's read_apple_mail's job).
-          - saturated: True iff the read hit the ceiling BEFORE passing the cutoff,
-                       i.e. older in-window mail may be unread. read_apple_mail then
-                       surfaces the account as CAPPED (partial) — never a silent
-                       truncation (COND-5).
+        Returns (records, examined, saw_out_of_window, total):
+          - records:            in-window (sender, subject, date, body) tuples — the
+                                AppleScript control-char framing is decoded here.
+          - examined:           how many messages were examined (min(total, ceiling)).
+          - saw_out_of_window:  True iff ANY examined message was out of window.
+          - total:              total messages in the inbox (informational).
+        read_apple_mail decides `saturated`/CAPPED from these via _is_saturated() —
+        the completeness DECISION lives in unit-tested Python, not the AppleScript.
 
-        Output format: a META header line `saturated(0|1) US total`, then the
+        Output format: META `examined US saw_out_of_window US total`, then the
         GS-framed records — split on the FIRST newline (META vs records). The META
         line is unspoofable: message bodies (which may carry newlines) all appear
         AFTER it, and the script emits it before any record.
@@ -273,21 +300,24 @@ class ReadMailDriver:
         )
         # META header (before the first newline) vs the record stream (after it).
         meta, _, stream = out.partition("\n")
-        saturated = meta.split(_US, 1)[0].strip() == "1"
+        meta_fields = meta.split(_US)
+        examined = _to_int(meta_fields[0]) if len(meta_fields) > 0 else 0
+        saw_out_of_window = (
+            meta_fields[1].strip() == "1" if len(meta_fields) > 1 else False
+        )
+        total = _to_int(meta_fields[2]) if len(meta_fields) > 2 else 0
 
         records: list[tuple[str, str, str, str]] = []
-        if not stream.strip():
-            return records, saturated
-        for rec in stream.split(_GS):
-            if rec == "":
-                continue
-            fields = rec.split(_US)
-            # Pad defensively to 4 fields.
-            while len(fields) < 4:
-                fields.append("")
-            sender, subject, date, body = fields[0], fields[1], fields[2], fields[3]
-            records.append((sender, subject, date, body))
-        return records, saturated
+        if stream.strip():
+            for rec in stream.split(_GS):
+                if rec == "":
+                    continue
+                fields = rec.split(_US)
+                # Pad defensively to 4 fields.
+                while len(fields) < 4:
+                    fields.append("")
+                records.append((fields[0], fields[1], fields[2], fields[3]))
+        return records, examined, saw_out_of_window, total
 
 
 # --------------------------------------------------------------------------- #
@@ -398,9 +428,8 @@ def read_apple_mail(
     scan is NEVER presented as a clean success (status is "partial" and the failed
     accounts are named). SYSTEMIC conditions still raise ReadMailError (fail loud):
     a failure at account ENUMERATION (list_accounts — Mail not running / auth /
-    osascript missing) and a TOTAL wipeout (zero accounts succeeded). [WS1 boundary,
-    PENDING Floyd re-ratification.] On every completed
-    read the integrity status is ALSO written to a machine-readable marker
+    osascript missing) and a TOTAL wipeout (zero accounts succeeded). On every
+    completed read the integrity status is ALSO written to a machine-readable marker
     (read_scan_status_path) so the viewer can surface a partial scan BY
     CONSTRUCTION — not by model discretion.
     """
@@ -526,9 +555,9 @@ def read_apple_mail(
     for acct in read_accts:
         is_personal = acct.domain in personal_domains
         try:
-            raw, saturated = driver.read_inbox(acct.name, cutoff)
+            raw, examined, saw_out_of_window, total = driver.read_inbox(acct.name, cutoff)
         except ReadMailError as exc:
-            # WS1 (per-account failure isolation) — PENDING FLOYD RE-RATIFICATION.
+            # WS1 (per-account failure isolation, ratified at Floyd's omnibus gate).
             # ANY error from a SINGLE account's read_inbox degrades THAT account
             # (skip + flag PARTIAL): a 90s subprocess TIMEOUT (ReadMailTimeout) OR a
             # pre-timeout per-account STALL surfacing as rc!=0 (e.g. AppleEvent
@@ -562,11 +591,14 @@ def read_apple_mail(
 
         accounts_read.append(acct.name)
 
-        # CAP (COND-5): the read hit the per-account ceiling before passing the
-        # cutoff, so OLDER in-window mail may be unread. Surface the account as
-        # CAPPED (the scan is marked partial) — never a silent truncation. C1: log
-        # account name + domain only, never message content.
-        if saturated:
+        # CAP (COND-5): the completeness DECISION is made HERE (testable Python), not
+        # in the AppleScript. The reader examined the newest min(total, ceiling)
+        # messages and collected EVERY in-window one regardless of order; it is
+        # saturated only if it examined the full ceiling AND even the boundary was
+        # still in-window (older in-window mail may be unread). Surface a saturated
+        # account as CAPPED (scan marked partial) — never a silent truncation. C1:
+        # log account name + domain + counts only, never message content.
+        if _is_saturated(examined, saw_out_of_window, READ_MAX_MESSAGES_PER_ACCOUNT):
             accounts_capped.append({"account": acct.name, "domain": acct.domain})
             _log(
                 {
@@ -574,6 +606,8 @@ def read_apple_mail(
                     "account": acct.name,
                     "domain": acct.domain,
                     "cap": READ_MAX_MESSAGES_PER_ACCOUNT,
+                    "examined": examined,
+                    "total": total,
                     "alert": "READ CAP reached for an allow-listed account — the "
                     "newest in-window messages were read, but OLDER in-window mail "
                     "may be unread. Scan marked PARTIAL (capped); surfaced to the "

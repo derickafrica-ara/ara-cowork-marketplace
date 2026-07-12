@@ -13,16 +13,23 @@
 --
 -- CAP (ADR docs/adr/0001 — fixes the ~90s timeout on years-large personal inboxes):
 -- instead of `messages whose date received > cutoff` — which walks the ENTIRE
--- inbox (O(inbox)) and timed out at 90s — this reads the inbox NEWEST-FIRST BY
--- INDEX (positional, O(1) per message) and stops as soon as it passes the cutoff
--- (delta complete) OR after examining `ceiling` messages (saturated). So the read
--- is bounded to O(ceiling), never O(inbox). Newest-first completeness (read ALL
--- in-window messages, not "N most recent then filter") means known-sender mail
--- buried under newsletter noise WITHIN the window is still captured.
+-- inbox (O(inbox)) and timed out at 90s — this examines the NEWEST min(total,
+-- ceiling) messages by index and returns every in-window message among them.
 --
--- COND-5: if the ceiling is hit BEFORE passing the cutoff, older in-window mail may
--- be unread — the SATURATED flag is set so the Python layer surfaces the account as
--- CAPPED (a partial scan), NEVER a silent truncation.
+-- R-SAFE (ordering-INDEPENDENT completeness — Floyd's COND-5 remediation):
+--   * NO early stop. Every one of the examined messages is checked and every
+--     in-window one (date received > cutoff) is collected, REGARDLESS of order — so
+--     a single message moved/delivered out of order (recent index, old date) can no
+--     longer truncate the collection (the previous early-stop silently dropped
+--     in-window mail sitting behind such a message).
+--   * The SATURATION/COMPLETENESS DECISION is NOT made here — this script returns
+--     the in-window records plus the raw metadata Python needs (examined count,
+--     whether any examined message was OUT of window, total count) and read_core
+--     (unit-tested Python) decides `saturated`.
+--   * SPEED: the newest range's dates are bulk-fetched in ONE osascript round-trip
+--     (`date received of messages lo thru hi`), not `ceiling` individual
+--     `message idx` accesses — bounded to O(ceiling) work, no O(inbox) `whose` walk.
+--     Full properties are fetched only for the (few) in-window messages.
 --
 -- READ-ONLY: the only Mail operations are property reads. There is NO save / send /
 -- delete / move / set. (COND-2, read side.) No shell is invoked.
@@ -33,13 +40,13 @@
 --   item 3 : ceiling — max messages to examine (integer as text)
 --
 -- Output framing:
---   * FIRST a META line: `saturated(0|1) US total-message-count`, terminated by the
---     FIRST newline. Emitted BEFORE any record; message bodies (which may contain
---     newlines) all appear AFTER it, so a crafted body cannot spoof the header.
---   * THEN the message records: fields separated by US (0x1F), records by GS (0x1D),
---     field order: sender US subject US date US body. Each field has US/GS/control
---     bytes STRIPPED before framing, so a crafted body cannot inject a separator.
---   * Python splits on the FIRST newline (META vs records), then GS then US.
+--   * FIRST a META line: `examined US saw_out_of_window(0|1) US total`, terminated
+--     by the FIRST newline. Emitted BEFORE any record; message bodies (which may
+--     contain newlines) all appear AFTER it, so a crafted body cannot spoof it.
+--   * THEN the in-window message records: fields separated by US (0x1F), records by
+--     GS (0x1D), field order: sender US subject US date US body. Each field has
+--     US/GS/control bytes STRIPPED before framing, so a crafted body cannot inject a
+--     separator. Python splits on the FIRST newline (META vs records), then GS/US.
 -- A message whose body is empty/blank (cached / not-yet-downloaded) is emitted with
 -- an EMPTY body field; Python detects that and skips+logs it (cached-body integrity).
 
@@ -66,7 +73,8 @@ on run argv
 	set us to (ASCII character 31)
 	set gs to (ASCII character 29)
 	set outRecords to {}
-	set saturated to false
+	set examined to 0
+	set sawOutOfWindow to false
 	set totalCount to 0
 
 	tell application "Mail"
@@ -78,72 +86,72 @@ on run argv
 		set totalCount to (count of messages of theInbox)
 
 		if totalCount > 0 then
-			-- Determine NEWEST-first index direction WITHOUT an O(inbox) walk: compare
-			-- the two endpoint messages' received dates (positional reads). Mail's
-			-- inbox message index order is monotonic by date; if message 1 is newer
-			-- than the last, iterate 1..N (index 1 = newest), else iterate N..1.
+			-- Newest-first index direction (endpoint comparison; positional reads).
 			set d1 to (date received of message 1 of theInbox)
 			set dN to (date received of message totalCount of theInbox)
-			if not (d1 < dN) then
-				set idx to 1
-				set step to 1
+			set newestIsFirst to (not (d1 < dN))
+
+			-- Examine the NEWEST min(totalCount, ceiling) messages, as an index range.
+			set examineCount to totalCount
+			if examineCount > ceiling then set examineCount to ceiling
+			if newestIsFirst then
+				set lo to 1
+				set hi to examineCount
 			else
-				set idx to totalCount
-				set step to -1
+				set lo to (totalCount - examineCount + 1)
+				set hi to totalCount
 			end if
 
-			set examined to 0
-			repeat
-				if (idx < 1) or (idx > totalCount) then exit repeat
-				set m to message idx of theInbox
-				set mDate to missing value
-				try
-					set mDate to (date received of m)
-				end try
+			-- Bulk-fetch the dates for the range in ONE round-trip (fast; NOT the
+			-- O(inbox) `whose` walk). item i of dList <-> inbox index (lo + i - 1).
+			set dList to (date received of messages lo thru hi of theInbox)
+			set nFetched to (count of dList)
+
+			repeat with i from 1 to nFetched
 				set examined to examined + 1
-
-				-- Passed the window? (dated AND not newer than cutoff) => the delta is
-				-- complete; all further-back messages are older. Stop.
-				if (mDate is not missing value) and (not (mDate > cutoffDate)) then
-					exit repeat
+				set mDate to item i of dList
+				if (mDate is missing value) or (mDate > cutoffDate) then
+					-- IN-WINDOW (undated emitted defensively — never silently dropped;
+					-- Python's cached-body integrity check handles blanks). Collect it
+					-- regardless of order. Fetch full props for THIS message only (the
+					-- in-window count is small for a delta), so we don't pull ~ceiling
+					-- bodies each run.
+					set idx to (lo + i - 1)
+					set m to message idx of theInbox
+					set theSender to ""
+					set theSubject to ""
+					set theDate to ""
+					set theBody to ""
+					try
+						set theSender to (sender of m) as text
+					end try
+					try
+						set theSubject to (subject of m) as text
+					end try
+					try
+						set theDate to ((date received of m) as text)
+					end try
+					try
+						set theBody to (content of m) as text
+					end try
+					set rec to (my stripCtrl(theSender)) & us & (my stripCtrl(theSubject)) & us & (my stripCtrl(theDate)) & us & (my stripCtrl(theBody))
+					set end of outRecords to rec
+				else
+					-- Out of window. Recorded (not collected). We do NOT early-stop —
+					-- every examined message is checked, so an interleaved out-of-window
+					-- message cannot truncate the in-window collection.
+					set sawOutOfWindow to true
 				end if
-
-				-- In-window (or undated: emit defensively — same leniency as before;
-				-- Python's cached-body integrity check handles blanks).
-				set theSender to ""
-				set theSubject to ""
-				set theDate to ""
-				set theBody to ""
-				try
-					set theSender to (sender of m) as text
-				end try
-				try
-					set theSubject to (subject of m) as text
-				end try
-				try
-					set theDate to ((date received of m) as text)
-				end try
-				try
-					set theBody to (content of m) as text
-				end try
-				set rec to (my stripCtrl(theSender)) & us & (my stripCtrl(theSubject)) & us & (my stripCtrl(theDate)) & us & (my stripCtrl(theBody))
-				set end of outRecords to rec
-
-				-- Hit the ceiling WITHOUT passing the cutoff => older in-window mail may
-				-- be unread. Flag saturated (Python surfaces CAPPED) and stop.
-				if examined is greater than or equal to ceiling then
-					set saturated to true
-					exit repeat
-				end if
-
-				set idx to idx + step
 			end repeat
 		end if
 	end tell
 
-	set satField to "0"
-	if saturated then set satField to "1"
-	set metaLine to satField & us & (totalCount as text)
+	-- META: examined US saw_out_of_window(0|1) US total. The completeness DECISION
+	-- (saturated = examined >= ceiling AND not saw_out_of_window) is made in
+	-- read_core (unit-tested Python), NOT here.
+	set sowField to "0"
+	if sawOutOfWindow then set sowField to "1"
+	set metaLine to (examined as text) & us & sowField & us & (totalCount as text)
 
 	set AppleScript's text item delimiters to gs
 	set outText to outRecords as text

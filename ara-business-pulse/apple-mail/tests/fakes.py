@@ -8,6 +8,7 @@ tree and can be ported here if/when draft tests are added to the plugin repo.
 
 from __future__ import annotations
 
+from config import READ_MAX_MESSAGES_PER_ACCOUNT
 from read_core import MailAccount, ReadMailDriver, ReadMailError, ReadMailTimeout
 
 
@@ -83,7 +84,12 @@ class FakeReadMailDriver(ReadMailDriver):
                 f"for {account_name!r}"
             )
         info = self._world.get(account_name)
-        saturated = account_name in self._saturated_accounts
-        if info is None:
-            return [], saturated
-        return list(info.get("messages", [])), saturated
+        records = list(info.get("messages", [])) if info else []
+        if account_name in self._saturated_accounts:
+            # Model a SATURATED read: examined the full ceiling and even the boundary
+            # was still in-window (saw_out_of_window=False) => _is_saturated True =>
+            # read_core flags the account CAPPED.
+            return records, READ_MAX_MESSAGES_PER_ACCOUNT, False, READ_MAX_MESSAGES_PER_ACCOUNT + 100
+        # Normal read: examined the returned records and DID see the window boundary
+        # (saw_out_of_window=True) => complete (never falsely capped).
+        return records, len(records), True, len(records)

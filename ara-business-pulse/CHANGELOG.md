@@ -7,20 +7,23 @@ inbox 90s timeouts that 0.3.2 made survivable but did not eliminate.
 
 - **Fix — personal inboxes no longer time out at 90s, and personal known-sender
   mail is delivered.** The read stopped using `whose date received > cutoff`, which
-  walked the ENTIRE (years-large) inbox. It now reads the inbox NEWEST-FIRST by
-  index and stops as soon as it passes the since-last-run cutoff or hits a per-
-  account ceiling (`READ_MAX_MESSAGES_PER_ACCOUNT`, 500) — bounded to O(ceiling),
-  not O(inbox). In 0.3.2 both personal accounts timed out and delivered zero mail;
-  0.3.3 delivers their known-sender mail.
-- **Completeness within the window (not "N most recent").** Because the read walks
-  newest-first and keeps ALL in-window messages, a known sender buried under
-  newsletter noise inside the window is still captured — the naive "read N newest,
-  filter" trap is avoided.
-- **Cap saturation is surfaced, never silently truncated (COND-5).** If the ceiling
-  is reached before the cutoff — older in-window mail may be unread — the account is
-  flagged CAPPED (`accounts_capped`, `status: "partial"`) and named on the 8788
-  viewer's INCOMPLETE-SCAN banner. A busy day never silently drops mail while
-  looking clean.
+  walked the ENTIRE (years-large) inbox. It now examines the NEWEST
+  `min(total, READ_MAX_MESSAGES_PER_ACCOUNT)` (500) messages by index (dates
+  bulk-fetched in one round-trip) — bounded to O(ceiling), not O(inbox). In 0.3.2
+  both personal accounts timed out and delivered zero mail; 0.3.3 delivers their
+  known-sender mail.
+- **Ordering-independent completeness (not "N most recent", and no early-stop).**
+  The read examines ALL of the newest-up-to-ceiling messages and keeps EVERY
+  in-window one, regardless of order — so a known sender buried under newsletter
+  noise, OR a message delivered/moved out of order, is still captured. It does not
+  stop at the first out-of-window message (which could otherwise silently drop
+  in-window mail behind it).
+- **Cap saturation is surfaced, never silently truncated (COND-5).** The account is
+  flagged CAPPED only when it examined the full ceiling AND every examined message
+  was still in-window (older in-window mail may exist beyond the ceiling) — the
+  completeness decision is made in unit-tested Python. A capped account is named in
+  `accounts_capped`, `status: "partial"`, and on the 8788 viewer's INCOMPLETE-SCAN
+  banner. A busy day never silently drops mail while looking clean.
 - Preserved: COND-8 allow-list + fail-closed, the known-senders filter, the
   ships-dark boundary skip, per-account degrade (timeout/stall) + systemic/wipeout
   fail-loud, C1 log-privacy, the run-token/cutoff correlation, and the structural
