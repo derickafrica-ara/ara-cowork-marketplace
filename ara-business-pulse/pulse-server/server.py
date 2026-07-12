@@ -233,9 +233,11 @@ def _incomplete_banner(info: dict) -> str:
     # once any account was CAPPED (older in-window mail may or may not exist).
     verb = "is" if not capped else "may be"
     tail = (
-        "That account was not fully read this run (timed out or read-capped)"
+        "That account was not fully read this run (timed out, read-capped, or "
+        "could not be read)"
         if len(escaped) == 1
-        else "Those accounts were not fully read this run (timed out or read-capped)"
+        else "Those accounts were not fully read this run (timed out, read-capped, "
+        "or could not be read)"
     )
     return (
         f'<div id="pulse-scan-warning" role="alert" style="{_BANNER_BASE}'

@@ -1,23 +1,45 @@
 # ADR 0001 — Large personal-inbox enumeration cost (~90s AppleScript scan)
 
-- **Status:** ACCEPTED — Option A (message-count cap) implemented in **0.3.3**.
-- **Date:** 2026-07-11
+- **Status:** SUPERSEDED-IN-PART — **Option D (provider IMAP) ADOPTED for personal
+  accounts in 0.4.0** (Floyd threat review ratified, Rulings 1–2 + R1–R29);
+  Option A (message-count cap, 0.3.3) RETAINED for the ARA business accounts.
+- **Date:** 2026-07-11 (0.4.0 update: 2026-07-12)
 - **Component:** `ara-business-pulse` — `apple-mail/` read path
 - **Related:** WS1 (per-account stall degrade)
 
-> **Update (0.3.3):** Option A is now shipped. `read_account.applescript` examines
-> the NEWEST `min(total, config.READ_MAX_MESSAGES_PER_ACCOUNT)` (500) messages by
+> **Update (0.4.0 — Option D adopted for personal accounts):** the 0.3.3 cap was
+> COND-5-correct but ineffective live: timing probes on the real 88k-message iCloud
+> inbox showed `count` and the two endpoint messages are cheap (special-cased), but
+> ANY index/range access costs ~1.8s/message — so even a ~60-message daily window
+> needs ~108s, over the 90s budget regardless of ceiling. AppleScript is
+> fundamentally the wrong tool for per-message work on large mailboxes. Personal
+> accounts (gmail.com/me.com/icloud.com) now read DIRECTLY from the provider over
+> TLS-validated, read-only IMAP (`imap_core.py`): server-side `UID SEARCH SINCE`
+> (date-indexed, sub-second), two-phase fetch (headers → known-senders filter →
+> bodies via BODY.PEEK), app-specific passwords Derick stores himself in the macOS
+> Keychain. **Floyd's threat review ratified this with compensating controls**
+> (hardcoded hosts, TLS ≥ 1.2 + system trust store, read-only verb set, EXAMINE +
+> PEEK, secret-hygiene prohibitions, one login attempt per scan, parser hardening,
+> per-connection audit). **Ruling 1:** the full-mailbox app password is acceptable
+> for v1 (iCloud offers no narrower mechanism); **Gmail `gmail.readonly` OAuth is
+> the documented tighter upgrade path** if/when a scoped, revocable token is worth
+> the OAuth-project overhead. No certificate pinning (considered decision —
+> provider certs rotate; validation via the system trust store is the control).
+>
+> **Option A (0.3.3) remains in force for the ARA business accounts** — their
+> mailboxes are small, the AppleScript path is fast there, and it needs no
+> credential. The R-SAFE cap machinery is retained unchanged as their guard.
+
+> **Update (0.3.3):** Option A shipped. `read_account.applescript` examines the
+> NEWEST `min(total, config.READ_MAX_MESSAGES_PER_ACCOUNT)` (500) messages by
 > index (dates bulk-fetched in one round-trip) and returns EVERY in-window one —
 > ordering-independent, no early stop (R-SAFE, closing the interleaved-message silent
 > drop). `read_core` makes the completeness DECISION in unit-tested Python via a
 > BOUNDARY rule (`_is_saturated` = `total > examined` AND the oldest-by-index
 > examined message is still in-window) and surfaces a saturated account as CAPPED
-> (`accounts_capped`,
-> `status: "partial"`, banner) — never a silent truncation (COND-5). The ~90s
-> enumeration timeout is eliminated in the logic; **the raw osascript speed and
-> Mail's index-ordering are confirmed only by a live run** (mocks can't measure them
-> — see `scripts/smoke_read_shape.py --live`). Option D (provider API) remains the
-> strategic follow-up behind a Floyd threat-model review.
+> (`accounts_capped`, `status: "partial"`, banner) — never a silent truncation
+> (COND-5). Live verification then showed the speed assumption fails on the 88k
+> iCloud inbox — see the 0.4.0 update above.
 
 ## Context — the root cost
 

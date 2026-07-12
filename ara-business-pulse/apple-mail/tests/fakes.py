@@ -9,7 +9,21 @@ tree and can be ported here if/when draft tests are added to the plugin repo.
 from __future__ import annotations
 
 from config import READ_MAX_MESSAGES_PER_ACCOUNT
+from imap_core import (
+    ImapAuthError,
+    ImapCredentialMissing,
+    ImapNetworkError,
+    ImapTimeoutError,
+    PersonalImapDriver,
+)
 from read_core import MailAccount, ReadMailDriver, ReadMailError, ReadMailTimeout
+
+_IMAP_FAIL_KINDS = {
+    "credential_missing": ImapCredentialMissing,
+    "auth_failed": ImapAuthError,
+    "network": ImapNetworkError,
+    "timeout": ImapTimeoutError,
+}
 
 
 class FakeReadMailDriver(ReadMailDriver):
@@ -94,3 +108,64 @@ class FakeReadMailDriver(ReadMailDriver):
         # Normal read: examined the whole inbox (total == examined) => complete
         # (total > examined is False) => never falsely capped.
         return records, len(records), False, len(records)
+
+
+class FakePersonalImapDriver(PersonalImapDriver):
+    """The PERSONAL-transport double (R29) — mirrors FakeReadMailDriver.
+
+    In-memory 'IMAP world': `world` maps account EMAIL -> [(sender, subject, date,
+    body), ...]. Records every read_personal call (`read_calls` = emails,
+    `read_cutoffs`, `keep_calls` = sender headers the injected predicate was asked
+    about) so tests can assert: ships-dark personal accounts NEVER reach the IMAP
+    transport (zero connections / zero Keychain reads — R22), the cutoff passed,
+    and the two-phase predicate usage.
+
+    Behavior mirrors the real driver's contract:
+      - applies the injected keep_sender predicate to each record's sender and
+        returns ONLY matches (R17: unknown-sender bodies are never 'downloaded');
+        the orchestrator's downstream filter still re-applies (defense in depth).
+      - `fail` maps email -> kind ("credential_missing" | "auth_failed" |
+        "network" | "timeout") and raises the matching PersonalImapError subclass.
+      - `capped_accounts` emails report meta capped=True (R18 overflow).
+    Never touches the network, imaplib, or the Keychain.
+    """
+
+    def __init__(
+        self,
+        world: dict[str, list] | None = None,
+        fail: dict[str, str] | None = None,
+        capped_accounts: set[str] | None = None,
+    ):
+        self._world = dict(world or {})
+        self._fail = dict(fail or {})
+        self._capped = set(capped_accounts or ())
+        self.read_calls: list[str] = []    # account emails read_personal saw
+        self.read_cutoffs: list[str] = []
+        self.keep_calls: list[str] = []    # sender headers offered to keep_sender
+
+    def read_personal(self, account_email, domain, cutoff, keep_sender):  # type: ignore[override]
+        self.read_calls.append(account_email)
+        self.read_cutoffs.append(cutoff)
+        kind = self._fail.get(account_email)
+        if kind:
+            exc_cls = _IMAP_FAIL_KINDS[kind]
+            raise exc_cls(
+                f"modeled IMAP {kind} for {account_email!r}",
+                host="imap.fake.test",
+                duration=0.01,
+            )
+        records = []
+        for sender, subject, date, body in self._world.get(account_email, []):
+            self.keep_calls.append(sender)
+            if keep_sender(sender):  # R17: only known-sender bodies are returned
+                records.append((sender, subject, date, body))
+        meta = {
+            "host": "imap.fake.test",
+            "duration": 0.01,
+            "total_uids": len(self._world.get(account_email, [])),
+            "processed_uids": len(self._world.get(account_email, [])),
+            "bodies_fetched": len(records),
+            "parse_skipped": 0,
+            "capped": account_email in self._capped,
+        }
+        return records, meta

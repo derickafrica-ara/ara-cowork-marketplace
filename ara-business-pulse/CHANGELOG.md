@@ -1,5 +1,47 @@
 # Changelog — ara-business-pulse
 
+## 0.4.0
+
+Personal mail moves to direct provider IMAP (COND-8 v0.4) — the real fix for the
+personal-inbox timeouts. Live diagnosis on the 88k-message iCloud inbox showed
+Apple Mail's AppleScript bridge costs ~1.8s per message touch (count/endpoints are
+cheap; any index/range access is not), so a daily ~60-message window needs ~108s —
+over budget regardless of the 0.3.3 cap. AppleScript is the wrong tool for large
+mailboxes; IMAP `SEARCH SINCE` is server-side date-indexed and returns the complete
+window in under a second. Floyd threat-review ratified (Rulings 1–2, R1–R29).
+
+- **Personal accounts (gmail.com / me.com / icloud.com) now read DIRECTLY from the
+  provider over TLS-validated IMAP** (hardcoded `imap.mail.me.com` /
+  `imap.gmail.com`, port 993, TLS ≥ 1.2, system trust store). Read-only by
+  construction: EXAMINE (read-only select) + UID SEARCH + UID FETCH(BODY.PEEK) —
+  the client cannot write, move, delete, flag, or mark-as-read, and never sets
+  \\Seen on Derick's real mail. ARA business accounts stay on the fast AppleScript
+  path (unchanged, R-SAFE cap retained).
+- **Auth: app-specific passwords Derick generates and stores himself in the macOS
+  Keychain** (`ara-business-pulse-imap-icloud` / `-gmail`). The raw secret never
+  appears in files, env vars, tool results, logs, or exception text; it is read at
+  runtime via `/usr/bin/security` (list argv, bounded timeout) and used only inside
+  the TLS session. One-time setup + revocation documented in the README.
+- **Two-phase privacy fetch:** phase 1 fetches INTERNALDATE + headers only; the
+  known-senders filter runs BEFORE any body fetch — bodies of unknown-sender
+  personal mail are never even downloaded. Window filtering uses the
+  server-assigned INTERNALDATE (never the attacker-controlled Date: header), with
+  a one-day SEARCH over-fetch so the day-granular SINCE can never under-fetch.
+- **Ships-dark = zero network:** an empty known-senders list means the personal
+  account is skipped at the account boundary — no Keychain read, no DNS, no
+  connection.
+- **Failure modes surface, never crash:** a missing Keychain item, auth rejection,
+  network/TLS failure, or timeout degrades THAT account
+  (`accounts_failed.kind`: credential_missing / auth_failed / network / timeout,
+  `status:"partial"`, named on the pulse banner). Exactly one login attempt per
+  scan (no lockout risk); zero accounts succeeding still fails loud.
+- **Parser hardening:** per-message (1 MB partial fetch) and per-account (25 MB)
+  byte bounds, stdlib email parsing with replace-on-bad-charset, text parts only
+  (attachments never decoded), MIME part-walk cap, control chars stripped; UID
+  result-set bound rides the existing `accounts_capped` machinery.
+- **Audit:** every IMAP connection is logged (account, host, outcome, duration,
+  counts — never content); read events now carry `via: "imap" | "applescript"`.
+
 ## 0.3.3
 
 Feature release — the message-count cap (ADR docs/adr/0001), fixing the personal-

@@ -53,6 +53,7 @@ from config import (
     sender_is_known,
     SCAN_STATUS_BASENAME,
 )
+from imap_core import PersonalImapDriver, PersonalImapError
 
 # --- Paths to the STATIC AppleScript files (never templated) ----------------
 _HERE = Path(__file__).resolve().parent
@@ -389,6 +390,7 @@ def read_apple_mail(
     driver: ReadMailDriver | None = None,
     log_path: str | None = None,
     status_path: str | None = None,
+    imap_driver: PersonalImapDriver | None = None,
 ) -> dict:
     """Return new messages since `since_iso` from ALLOW-LISTED accounts only.
 
@@ -397,10 +399,13 @@ def read_apple_mail(
         accounts:  optional explicit subset of account-domains to read. It is
                    INTERSECTED with the COND-8 allow-list — it can only ever
                    NARROW, never widen, what may be read. (Defense in depth.)
-        driver:    injectable ReadMailDriver (tests pass a fake).
+        driver:    injectable ReadMailDriver — the AppleScript transport for the
+                   ARA business accounts (tests pass a fake).
         log_path:  read run-log path override.
         status_path: last-scan integrity-marker path override (the viewer reads
                    this to render the partial-scan banner structurally).
+        imap_driver: injectable PersonalImapDriver — the direct-IMAP transport
+                   for PERSONAL domains (COND-8 v0.4; tests pass a fake).
 
     Returns a structured result dict:
         {
@@ -421,25 +426,30 @@ def read_apple_mail(
     others still returned — the caller MUST surface a partial scan PROMINENTLY (never
     render it as a complete pulse). "ok" otherwise.
 
-    COND-8: a non-allow-listed account is never passed to the read script — its
-    inbox is never enumerated, zero message reads. Fail closed: if the allow-list
-    is empty, NOTHING is read. PERSONAL-scope accounts (read_personal_domains) are
-    additionally filtered to KNOWN SENDERS only (read_known_senders) — the reliable
-    substitute for Apple Mail's non-scriptable "Primary" category; empty
-    known-senders => a personal account contributes zero messages and is skipped
-    AT THE ACCOUNT BOUNDARY (its inbox is never enumerated — it "ships dark").
-    COND-5 (max-availability): ANY per-account read failure — a 90s TIMEOUT or a
-    pre-timeout STALL surfacing as rc!=0 (e.g. AppleEvent -1712) — degrades that ONE
-    account (skip + flag partial) instead of aborting the whole scan, but a partial
-    scan is NEVER presented as a clean success (status is "partial" and the failed
-    accounts are named). SYSTEMIC conditions still raise ReadMailError (fail loud):
-    a failure at account ENUMERATION (list_accounts — Mail not running / auth /
-    osascript missing) and a TOTAL wipeout (zero accounts succeeded). On every
-    completed read the integrity status is ALSO written to a machine-readable marker
-    (read_scan_status_path) so the viewer can surface a partial scan BY
-    CONSTRUCTION — not by model discretion.
+    COND-8 (v0.4): a non-allow-listed account is never read — zero message reads.
+    Fail closed: empty allow-list => NOTHING is read. Transport is routed by
+    domain: ARA business accounts read the local Mail.app inbox via AppleScript
+    (bounded delta + R-SAFE index cap); PERSONAL domains read DIRECTLY from the
+    provider over TLS-validated, read-only IMAP (hardcoded hosts, EXAMINE/SEARCH/
+    FETCH-PEEK only; app-specific password from Derick's Keychain — the raw secret
+    never appears in files, env, results, or logs). Personal accounts are filtered
+    to KNOWN SENDERS only, and bodies of unknown-sender mail are never even
+    downloaded (two-phase fetch); empty known-senders => the personal account
+    ships dark AT THE ACCOUNT BOUNDARY — no connection, no Keychain read, zero
+    network. See the MCP tool docstring for the full COND-8 v0.4 contract text.
+    COND-5 (max-availability): ANY per-account read failure — AppleScript timeout/
+    stall, or IMAP credential_missing / auth_failed / network / timeout — degrades
+    that ONE account (skip + flag partial, kind recorded) instead of aborting the
+    whole scan, but a partial scan is NEVER presented as a clean success (status is
+    "partial" and the failed accounts are named). SYSTEMIC conditions still raise
+    ReadMailError (fail loud): a failure at account ENUMERATION (list_accounts —
+    Mail not running / osascript missing) and a TOTAL wipeout (zero accounts
+    succeeded). On every completed read the integrity status is ALSO written to a
+    machine-readable marker (read_scan_status_path) so the viewer can surface a
+    partial scan BY CONSTRUCTION — not by model discretion.
     """
     driver = driver or ReadMailDriver()
+    imap_driver = imap_driver or PersonalImapDriver()
     status_path = status_path or read_scan_status_path()
 
     # Normalize the cutoff (fail closed on garbage) BEFORE any Mail call.
@@ -548,79 +558,180 @@ def read_apple_mail(
 
     results: list[dict] = []
 
-    # Phase 2: read ONLY allow-listed accounts' inboxes (bounded delta). All
-    # accounts — personal and business — use the same `cutoff` (the since-last-run
-    # window; 24h on the first run when there is no run-state).
-    # Max-availability (COND-5): a per-account read failure degrades THAT account
-    # (skip + flag PARTIAL) so one slow/stalled inbox can't kill the scan; systemic
-    # conditions and a total wipeout still fail loud, and any partial is surfaced
-    # below — never presented as a clean success.
+    # Phase 2: read ONLY allow-listed accounts (bounded delta), routed by TRANSPORT
+    # (COND-8 v0.4, R28: routing lives HERE in the orchestrator):
+    #   - ARA business domains -> local Mail.app via AppleScript (ReadMailDriver,
+    #     R-SAFE index cap — unchanged).
+    #   - PERSONAL domains -> direct provider IMAP (PersonalImapDriver, read-only,
+    #     two-phase known-senders fetch). A ships-dark personal account never
+    #     reaches here (boundary skip above) => zero Keychain reads, zero network
+    #     (R22). The driver gets ONLY a keep_sender predicate — never the
+    #     known-senders list (R17/R28); the downstream per-message filter still
+    #     re-applies as defense in depth.
+    # All accounts use the same `cutoff` (since-last-run; 24h on first run).
+    # Max-availability (COND-5): a per-account failure degrades THAT account
+    # (skip + flag PARTIAL, kind recorded per Ruling 2); systemic conditions and a
+    # total wipeout still fail loud; a partial is never presented as clean.
     accounts_read: list[str] = []
     accounts_failed: list[dict] = []
     accounts_capped: list[dict] = []
+
+    def _keep_sender(sender_text: str, _ks=known_senders) -> bool:
+        # R17: the orchestrator-owned known-senders discipline, injected into the
+        # IMAP transport so unknown-sender bodies are never even downloaded.
+        return sender_is_known(_extract_sender_address(sender_text), _ks)
+
     for acct in read_accts:
         is_personal = acct.domain in personal_domains
-        try:
-            raw, examined, boundary_in_window, total = driver.read_inbox(acct.name, cutoff)
-        except ReadMailError as exc:
-            # WS1 (per-account failure isolation, ratified at Floyd's omnibus gate).
-            # ANY error from a SINGLE account's read_inbox degrades THAT account
-            # (skip + flag PARTIAL): a 90s subprocess TIMEOUT (ReadMailTimeout) OR a
-            # pre-timeout per-account STALL surfacing as rc!=0 (e.g. AppleEvent
-            # -1712). Enumeration (list_accounts, Phase 1) already succeeded, so the
-            # other accounts remain attemptable — this is per-account, not systemic.
-            # SYSTEMIC conditions (Mail not running / auth / osascript missing) surface
-            # at list_accounts (Phase 1 -> fail-loud) or as a TOTAL wipeout (floor
-            # below -> fail-loud). NOT swallowed: recorded + surfaced as PARTIAL so a
-            # partial is never presented as complete (COND-5). NOTE: this REVERSES the
-            # prior "read_inbox rc!=0 -> systemic -> fail-loud" rule at the per-account
-            # level (rc!=0 at list_accounts is still systemic).
-            kind = "timeout" if isinstance(exc, ReadMailTimeout) else "stall"
-            accounts_failed.append(
-                {"account": acct.name, "domain": acct.domain, "reason": str(exc)}
-            )
+        via = "imap" if is_personal else "applescript"
+
+        if is_personal:
+            try:
+                raw, imap_meta = imap_driver.read_personal(
+                    acct.email, acct.domain, cutoff, _keep_sender
+                )
+            except PersonalImapError as exc:
+                # Ruling 2: credential_missing / auth_failed / network / timeout
+                # all degrade THIS account (skip + PARTIAL), never crash the scan,
+                # and ride the existing accounts_failed -> marker -> banner path.
+                accounts_failed.append(
+                    {
+                        "account": acct.name,
+                        "domain": acct.domain,
+                        "reason": str(exc),
+                        "kind": exc.kind,
+                    }
+                )
+                _log(
+                    {
+                        # R14 — per-connection audit (C1-safe: no content, no secret).
+                        "event": "read_imap_connection",
+                        "account": acct.name,
+                        "domain": acct.domain,
+                        "host": exc.host,
+                        "via": "imap",
+                        "outcome": exc.kind,
+                        "duration": round(exc.duration, 3),
+                    },
+                    log_path,
+                )
+                _log(
+                    {
+                        "event": "read_account_degraded",
+                        "account": acct.name,
+                        "domain": acct.domain,
+                        "via": "imap",
+                        "kind": exc.kind,
+                        "reason": str(exc),
+                        "alert": "READ FAILED for an allow-listed personal account "
+                        f"(per-account {exc.kind}) — that account is SKIPPED this "
+                        "run and the scan is marked PARTIAL (max-availability). "
+                        "Surfaced to the human; NOT presented as a complete scan.",
+                    },
+                    log_path,
+                )
+                continue
+
+            accounts_read.append(acct.name)
             _log(
                 {
-                    "event": "read_account_degraded",
+                    # R14 — per-connection audit: account/host/outcome/duration/counts.
+                    "event": "read_imap_connection",
                     "account": acct.name,
                     "domain": acct.domain,
-                    "kind": kind,
-                    "reason": str(exc),
-                    "alert": "READ FAILED for an allow-listed account (per-account "
-                    f"{kind}) — that account is SKIPPED this run and the scan is "
-                    "marked PARTIAL (max-availability). Surfaced to the human; NOT "
-                    "presented as a complete scan.",
+                    "host": imap_meta.get("host", ""),
+                    "via": "imap",
+                    "outcome": "ok",
+                    "duration": imap_meta.get("duration", 0.0),
+                    "total_uids": imap_meta.get("total_uids", 0),
+                    "processed_uids": imap_meta.get("processed_uids", 0),
+                    "bodies_fetched": imap_meta.get("bodies_fetched", 0),
+                    "parse_skipped": imap_meta.get("parse_skipped", 0),
                 },
                 log_path,
             )
-            continue
+            if imap_meta.get("capped"):
+                # R18/R24 overflow rides the EXISTING capped machinery (COND-5:
+                # incomplete is surfaced, never silent).
+                accounts_capped.append({"account": acct.name, "domain": acct.domain})
+                _log(
+                    {
+                        "event": "read_account_capped",
+                        "account": acct.name,
+                        "domain": acct.domain,
+                        "via": "imap",
+                        "total_uids": imap_meta.get("total_uids", 0),
+                        "processed_uids": imap_meta.get("processed_uids", 0),
+                        "alert": "IMAP result-set/byte bound reached for a personal "
+                        "account — the newest in-window messages were processed, but "
+                        "some in-window mail was NOT. Scan marked PARTIAL (capped); "
+                        "surfaced to the human, NOT presented as a complete scan.",
+                    },
+                    log_path,
+                )
+        else:
+            try:
+                raw, examined, boundary_in_window, total = driver.read_inbox(
+                    acct.name, cutoff
+                )
+            except ReadMailError as exc:
+                # WS1 (per-account failure isolation, ratified at Floyd's omnibus
+                # gate): a 90s subprocess TIMEOUT (ReadMailTimeout) OR a pre-timeout
+                # per-account STALL (rc!=0, e.g. AppleEvent -1712) degrades THIS
+                # account. Enumeration (list_accounts) already succeeded, so others
+                # remain attemptable. SYSTEMIC conditions surface at list_accounts
+                # (fail-loud) or as a TOTAL wipeout (floor below). Never presented
+                # as a complete scan (COND-5).
+                kind = "timeout" if isinstance(exc, ReadMailTimeout) else "stall"
+                accounts_failed.append(
+                    {
+                        "account": acct.name,
+                        "domain": acct.domain,
+                        "reason": str(exc),
+                        "kind": kind,
+                    }
+                )
+                _log(
+                    {
+                        "event": "read_account_degraded",
+                        "account": acct.name,
+                        "domain": acct.domain,
+                        "via": "applescript",
+                        "kind": kind,
+                        "reason": str(exc),
+                        "alert": "READ FAILED for an allow-listed account "
+                        f"(per-account {kind}) — that account is SKIPPED this run "
+                        "and the scan is marked PARTIAL (max-availability). Surfaced "
+                        "to the human; NOT presented as a complete scan.",
+                    },
+                    log_path,
+                )
+                continue
 
-        accounts_read.append(acct.name)
+            accounts_read.append(acct.name)
 
-        # CAP (COND-5): the completeness DECISION is made HERE (testable Python), not
-        # in the AppleScript. The reader examined the newest min(total, ceiling)
-        # messages and collected EVERY in-window one regardless of order; it is
-        # saturated iff there is unexamined mail (total > examined) AND the far-end
-        # boundary of the examined range is still in-window (in-window mail may sit
-        # beyond it). Surface a saturated account as CAPPED (scan marked partial) —
-        # never a silent truncation. C1: log account + domain + counts only.
-        if _is_saturated(examined, boundary_in_window, total):
-            accounts_capped.append({"account": acct.name, "domain": acct.domain})
-            _log(
-                {
-                    "event": "read_account_capped",
-                    "account": acct.name,
-                    "domain": acct.domain,
-                    "cap": READ_MAX_MESSAGES_PER_ACCOUNT,
-                    "examined": examined,
-                    "total": total,
-                    "alert": "READ CAP reached for an allow-listed account — the "
-                    "newest in-window messages were read, but OLDER in-window mail "
-                    "may be unread. Scan marked PARTIAL (capped); surfaced to the "
-                    "human, NOT presented as a complete scan.",
-                },
-                log_path,
-            )
+            # CAP (COND-5, AppleScript/ARA path — R18 corollary: this R-SAFE cap
+            # machinery is KEPT; it still guards the ARA accounts): saturated iff
+            # unexamined mail exists (total > examined) AND the far-end boundary of
+            # the examined range is still in-window. Surfaced, never silent.
+            if _is_saturated(examined, boundary_in_window, total):
+                accounts_capped.append({"account": acct.name, "domain": acct.domain})
+                _log(
+                    {
+                        "event": "read_account_capped",
+                        "account": acct.name,
+                        "domain": acct.domain,
+                        "via": "applescript",
+                        "cap": READ_MAX_MESSAGES_PER_ACCOUNT,
+                        "examined": examined,
+                        "total": total,
+                        "alert": "READ CAP reached for an allow-listed account — the "
+                        "newest in-window messages were read, but OLDER in-window "
+                        "mail may be unread. Scan marked PARTIAL (capped); surfaced "
+                        "to the human, NOT presented as a complete scan.",
+                    },
+                    log_path,
+                )
 
         kept = 0
         skipped_blank = 0
@@ -687,6 +798,7 @@ def read_apple_mail(
                 "event": "read_account_done",
                 "account": acct.name,
                 "domain": acct.domain,
+                "via": via,
                 "scope": "personal-known-senders" if is_personal else "full-inbox",
                 "messages_returned": kept,
                 "blank_skipped": skipped_blank,

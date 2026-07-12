@@ -103,6 +103,73 @@ The **Teams webhook URL is a secret** and is deliberately NOT in `.mcp.json` and
 NOT in the repo — it lives only in the local `config.json` (outside git, outside
 the Dropbox folder), never baked into the plugin (COND-3).
 
+## Personal mail over IMAP (v0.4) — COND-8 v0.4 contract + one-time setup
+
+> **COND-8 (privacy boundary — v0.4).** The read tool reads ONLY accounts whose
+> email domain is on the fixed allow-list; empty allow-list ⇒ reads NOTHING (fail
+> closed). ARA business accounts (ara-data.com, ARAdata.onmicrosoft.com) are read
+> from the local Mail.app via AppleScript — full inbox, bounded delta, no
+> credential. Personal accounts (gmail.com / me.com / icloud.com) are read
+> DIRECTLY from the provider over TLS-validated IMAP (imap.mail.me.com /
+> imap.gmail.com, hardcoded, port 993), read-only by construction: the client can
+> only EXAMINE, SEARCH, and FETCH(PEEK) — it cannot write, move, delete, flag, or
+> mark-as-read anything, and message state in the mailbox is never modified.
+> Personal reads authenticate with app-specific passwords Derick generated and
+> stored himself in the macOS Keychain; ARA never sees, stores, logs, or transmits
+> the raw secret anywhere except inside the TLS session to the provider, and it
+> never appears in files, env vars, tool results, or logs. Personal messages
+> remain filtered to KNOWN SENDERS only — bodies of unknown-sender mail are never
+> even downloaded — and an empty known-senders list means the personal account
+> ships dark: no connection is made at all. A personal account with a populated
+> known-senders list but a missing/failed credential is skipped and the scan is
+> marked partial (visible on the pulse banner — never silent). Every account
+> read/skip and every IMAP connection is audit-logged (names, domains, counts —
+> never content).
+
+### One-time setup (Derick does this himself — ARA never handles the raw secret)
+
+1. **Generate app-specific passwords** (needs 2FA on the Apple ID / Google acct):
+   - **iCloud:** appleid.apple.com → Sign-In and Security → App-Specific
+     Passwords → Generate (name it e.g. `ara-business-pulse`).
+   - **Gmail:** myaccount.google.com/apppasswords → create one for Mail.
+2. **Store each in the macOS Keychain — interactive prompt mode** (the `-w` flag
+   with no value prompts; the password is **never typed as a CLI argument** and
+   **never** stored with `-A` [that would skip the access prompt]):
+
+   ```sh
+   security add-generic-password -a "<your-icloud-account-email>" \
+     -s ara-business-pulse-imap-icloud -w
+   security add-generic-password -a "<your-gmail-address>" \
+     -s ara-business-pulse-imap-gmail -w
+   ```
+
+   Use the **exact account email shown in Mail's account list** as `-a` (for
+   iCloud, if login fails, re-store with your primary Apple ID address — a
+   mismatch shows up as a visible `credential_missing` skip on the pulse banner,
+   never a silent gap).
+3. **First read → Keychain prompt → "Always Allow".** The first scan triggers a
+   macOS Keychain access prompt for each item; clicking **Always Allow** is your
+   explicit ACL grant to the plugin's Python. (Clicking Deny/ignoring degrades
+   that account to `credential_missing` — visible on the banner.)
+4. **Revocation — one click each:** revoke the app password at
+   appleid.apple.com → App-Specific Passwords (iCloud) or
+   myaccount.google.com/apppasswords (Gmail), and/or delete the Keychain items:
+
+   ```sh
+   security delete-generic-password -s ara-business-pulse-imap-icloud
+   security delete-generic-password -s ara-business-pulse-imap-gmail
+   ```
+
+**Accepted residual risks (stated honestly):** after your "Always Allow" grant,
+any process running as your user could read those Keychain items — that attacker
+already owns your session; Python strings holding the password during login are
+not zeroizable. The app-specific password grants full-mailbox access at the
+provider even though this client is read-only by construction (iCloud offers no
+narrower credential; Gmail's `gmail.readonly` OAuth is the documented tighter
+upgrade path — see ADR 0001). No certificate pinning (considered decision):
+validation is the system trust store + hostname check; pinning rotating provider
+certs would break on normal rotation.
+
 ## Pulse viewer — bookmarked webpage with a Refresh button (`pulse-server/`)
 
 A localhost-only web viewer so the pulse is the first thing you see when you
