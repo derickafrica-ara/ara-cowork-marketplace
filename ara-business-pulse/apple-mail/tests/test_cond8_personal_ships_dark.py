@@ -224,7 +224,7 @@ class TestCond8PersonalShipsDark(unittest.TestCase):
         self.assertEqual(
             set(res),
             {"status", "messages", "accounts_read", "accounts_failed",
-             "accounts_skipped_dark", "cutoff"},
+             "accounts_capped", "accounts_skipped_dark", "cutoff"},
         )
         self.assertIn(res["status"], ("ok", "partial"))
         self.assertIsInstance(res["messages"], list)

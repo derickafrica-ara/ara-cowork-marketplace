@@ -34,19 +34,20 @@ os.environ["APPLE_MAIL_READ_KNOWN_SENDERS"] = ""  # deterministic; personal ship
 from read_core import MailAccount, ReadMailDriver, read_apple_mail  # noqa: E402
 
 DOCUMENTED_KEYS = {
-    "status", "messages", "accounts_read", "accounts_failed",
+    "status", "messages", "accounts_read", "accounts_failed", "accounts_capped",
     "accounts_skipped_dark", "cutoff",
 }
 
 
 class _FakeDriver(ReadMailDriver):
-    """Stand-in for Apple Mail — one ARA account, one message. No osascript."""
+    """Stand-in for Apple Mail — one ARA account, one message. No osascript.
+    read_inbox returns (records, saturated) — the current driver contract."""
 
     def list_accounts(self):  # type: ignore[override]
         return [MailAccount(name="ARA", email="derick@ara-data.com")]
 
     def read_inbox(self, account_name, cutoff):  # type: ignore[override]
-        return [("client@ara-data.com", "Subject", "2026-07-11 07:00:00", "body text")]
+        return [("client@ara-data.com", "Subject", "2026-07-11 07:00:00", "body text")], False
 
 
 def main() -> int:

@@ -225,6 +225,61 @@ class TestCond5GracefulDegradation(unittest.TestCase):
             read_apple_mail(SINCE, driver=driver, log_path=self.log)
         self.assertIn("no account returned", str(ctx.exception))
 
+    # --- CAP: saturation is FLAGGED (partial + capped), never silently truncated --
+    def test_capped_account_flags_partial_not_silent(self):
+        # The read hit the per-account ceiling => older in-window mail may be unread.
+        # It must be surfaced (status partial + accounts_capped), NOT reported clean.
+        driver = FakeReadMailDriver(_world(), saturated_accounts={PERSONAL_ICLOUD})
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+
+        self.assertEqual(res["status"], "partial", "capped scan must not look clean")
+        self.assertIn(PERSONAL_ICLOUD, [c["account"] for c in res["accounts_capped"]])
+        # Capped != failed: the account WAS read and delivers what it read.
+        self.assertIn(PERSONAL_ICLOUD, res["accounts_read"])
+        self.assertNotIn(PERSONAL_ICLOUD, [f["account"] for f in res["accounts_failed"]])
+        self.assertIn("known@family.net", {m["sender"] for m in res["messages"]})
+        # Loudly logged; C1: no message content leaks into the log.
+        raw_log = json.dumps(_read_log(self.log))
+        self.assertIn("read_account_capped", raw_log)
+        self.assertNotIn("personal known", raw_log)  # message body must not leak
+
+    # --- CAP: a capped account alongside clean ones => partial, others intact ------
+    def test_capped_and_clean_accounts_mix(self):
+        driver = FakeReadMailDriver(_world(), saturated_accounts={PERSONAL_ICLOUD})
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        self.assertEqual(res["status"], "partial")
+        self.assertEqual([c["account"] for c in res["accounts_capped"]], [PERSONAL_ICLOUD])
+        # The clean accounts still deliver their mail end-to-end.
+        accts = {m["account"] for m in res["messages"]}
+        self.assertIn(ARA_BIZ, accts)
+        self.assertIn(ARA_M365, accts)
+        self.assertIn(PERSONAL_GMAIL, accts)  # clean personal account unaffected
+
+    # --- CAP/completeness: a known sender BURIED under newsletter noise is delivered
+    def test_buried_known_sender_is_delivered(self):
+        # read_core must NOT itself truncate to "N most recent": given a driver that
+        # returns all in-window messages (newsletters + a buried known sender), the
+        # known-sender message is delivered and the newsletters (unknown personal
+        # senders) are dropped. (The AppleScript's newest-first completeness that
+        # produces this list is live-only; this pins the read_core half.)
+        world = {
+            ARA_BIZ: {"email": "derick@ara-data.com", "messages": [
+                ("client@acme.com", "Q3", "2026-07-11 07:00:00", "real ara body")]},
+            PERSONAL_ICLOUD: {"email": "derick@icloud.com", "messages": [
+                ("news@newsletter.io", "Deal", "2026-07-11 07:20:00", "promo one"),
+                ("noreply@receipts.com", "Receipt", "2026-07-11 07:19:00", "a receipt"),
+                ("alerts@bank.example", "Alert", "2026-07-11 07:18:00", "an alert"),
+                # the real one, buried beneath the noise:
+                ("known@family.net", "hi there", "2026-07-11 07:10:00", "the real message"),
+            ]},
+        }
+        driver = FakeReadMailDriver(world)
+        res = read_apple_mail(SINCE, driver=driver, log_path=self.log)
+        senders = {m["sender"] for m in res["messages"]}
+        self.assertIn("known@family.net", senders)          # buried known sender delivered
+        self.assertNotIn("news@newsletter.io", senders)     # newsletter noise dropped
+        self.assertNotIn("noreply@receipts.com", senders)
+
     # --- C-WS2: personal accounts use the SAME cutoff as business (no widening) ---
     def test_personal_accounts_use_same_cutoff_as_business(self):
         # The first-run 3-day personal window was dropped: ALL accounts — personal
@@ -261,12 +316,12 @@ class TestCond5GracefulDegradation(unittest.TestCase):
         # A path that is NOT the dedicated marker (e.g. the known-senders file) must
         # never be written — the guard makes clobbering another file impossible.
         bad = os.path.join(self.status_dir, "known-senders.txt")
-        _write_scan_status("partial", [{"account": "X", "domain": "x"}], SINCE, bad)
+        _write_scan_status("partial", [{"account": "X", "domain": "x"}], [], SINCE, bad)
         self.assertFalse(os.path.exists(bad),
                          "clobber guard must refuse a non-marker basename")
         # ...while the real marker basename DOES get written.
         good = os.path.join(self.status_dir, config.SCAN_STATUS_BASENAME)
-        _write_scan_status("partial", [{"account": "X", "domain": "x"}], SINCE, good)
+        _write_scan_status("partial", [{"account": "X", "domain": "x"}], [], SINCE, good)
         self.assertTrue(os.path.exists(good))
 
 

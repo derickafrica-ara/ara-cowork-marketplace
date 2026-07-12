@@ -112,9 +112,12 @@ def read_apple_mail(
         Any other account in Mail (e.g. a personal Gmail/iCloud) is skipped
         ENTIRELY — its inbox is never enumerated, zero messages are read. If the
         allow-list is empty/misconfigured the tool reads NOTHING (fail closed).
-      - It performs a BOUNDED DELTA scan: only the INBOX of each allow-listed
-        account, only messages newer than `since_iso`. It never enumerates every
-        mailbox of every account.
+      - It performs a BOUNDED DELTA scan: each allow-listed INBOX is read
+        NEWEST-FIRST by index only until it passes `since_iso` or hits a per-account
+        message CEILING — O(ceiling), never the O(inbox) walk. If the ceiling is hit
+        before passing the cutoff, older in-window mail may be unread: that account
+        is named in `accounts_capped` and the scan is `status: "partial"` (CAPPED —
+        surfaced, never a silent truncation). It never enumerates every mailbox.
       - A message with a blank/partial (not-yet-downloaded) body is skipped and
         logged, never returned as a blank.
       - AVAILABILITY vs COND-5: ANY per-account read failure — a TIMEOUT or a
@@ -138,12 +141,15 @@ def read_apple_mail(
           "status": "ok" | "partial",
           "messages": [ {"account","sender","subject","date","body"}, ... ],
           "accounts_read": [names read successfully],
-          "accounts_failed": [ {"account","domain","reason"}, ... ],  # timed out
+          "accounts_failed": [ {"account","domain","reason"}, ... ],  # timed out/stalled
+          "accounts_capped": [ {"account","domain"}, ... ],  # ceiling hit; older
+                             #   in-window mail may be unread
           "accounts_skipped_dark": [ {"name","domain"}, ... ],  # ships-dark personal
           "cutoff": "<normalized cutoff>",  # run token; stamp into the saved pulse
         }
-        `status: "partial"` means one or more allow-listed accounts timed out and
-        were skipped this run — render that prominently; never as a complete scan.
+        `status: "partial"` means one or more allow-listed accounts either failed
+        (timeout/stall) or were CAPPED this run — render that prominently; never as a
+        complete scan.
     """
     try:
         return _read_apple_mail(since_iso=since_iso, accounts=accounts)

@@ -163,7 +163,7 @@ class TestScanStatusBanner(unittest.TestCase):
              "accounts_failed": [{"account": "Personal iCloud", "domain": "icloud.com"}]}
         )
         one = server._render(NONCE).decode()
-        self.assertIn("That account timed out and was skipped this run", one)
+        self.assertIn("That account was not fully read this run", one)
         self.assertNotIn("Those accounts", one)
 
         self._write_marker(
@@ -172,8 +172,20 @@ class TestScanStatusBanner(unittest.TestCase):
                 {"account": "ARA M365", "domain": "aradata.onmicrosoft.com"}]}
         )
         two = server._render(NONCE).decode()
-        self.assertIn("Those accounts timed out and were skipped this run", two)
-        self.assertNotIn("That account timed out", two)
+        self.assertIn("Those accounts were not fully read this run", two)
+        self.assertNotIn("That account was not fully read", two)
+
+    # --- CAP: a CAPPED account (no failures) is named in the RED banner ("may be") -
+    def test_capped_account_named_in_banner(self):
+        self._write_pulse(_pulse_with_token(TOKEN))
+        self._write_marker(
+            {"status": "partial", "cutoff": TOKEN, "accounts_failed": [],
+             "accounts_capped": [{"account": "Personal iCloud", "domain": "icloud.com"}]}
+        )
+        served = server._render(NONCE).decode()
+        self.assertIn("INCOMPLETE SCAN", served)
+        self.assertIn("Personal iCloud", served)   # capped account named in the chip
+        self.assertIn("may be missing", served)     # capped wording (not definite)
 
     # --- account name is HTML-escaped (no markup injection via account name) -----
     def test_account_name_is_html_escaped(self):

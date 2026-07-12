@@ -187,6 +187,18 @@ MAX_KNOWN_SENDERS_FILE_BYTES = 1_000_000
 # treated as absent (fall back to env).
 _KNOWN_SENDER_ENTRY_RE = re.compile(r"^(?:[^@\s,]+@)?[a-z0-9.-]+\.[a-z]{2,}$")
 
+# Per-account read CEILING (the message-count cap; ADR docs/adr/0001). The read
+# script walks the inbox NEWEST-FIRST by index and stops as soon as it passes the
+# cutoff (delta complete) OR after examining this many messages (saturated). This
+# bounds the read to O(ceiling) instead of the O(inbox) `whose date received >
+# cutoff` walk that timed out at 90s on years-large personal inboxes. Rationale for
+# 500: a since-last-run (24h) delta almost never exceeds 500 messages even on a
+# newsletter-flooded personal inbox, so a clean day is never falsely flagged; and
+# examining ~500 message headers stays well under the 90s timeout. If a genuinely
+# busier-than-500 window occurs, the account is flagged CAPPED (surfaced, never
+# silently truncated — COND-5), not dropped.
+READ_MAX_MESSAGES_PER_ACCOUNT = 500
+
 # Bounds for the read path (untrusted-body hardening). Bodies longer than this are
 # truncated (and flagged) rather than pulled wholesale into context.
 MAX_READ_BODY_LEN = 200_000     # generous per-message body cap for the digest scan

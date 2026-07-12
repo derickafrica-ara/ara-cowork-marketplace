@@ -211,22 +211,31 @@ _BANNER_ACCOUNTS = (
 
 
 def _incomplete_banner(info: dict) -> str:
-    """RED 'incomplete scan' banner (Anna's styling) naming the skipped account(s).
-    Built ENTIRELY from the Python-written marker (account name, HTML-escaped) — no
-    model output flows into it, so an injected 'hide the warning' instruction cannot
-    remove it and the account name cannot smuggle markup. No script (CSP-safe).
-    Load-bearing (asserted): id="pulse-scan-warning", the string "INCOMPLETE SCAN",
-    and the escaped account name as visible text."""
-    failed = info.get("accounts_failed") or []
-    escaped = [
-        html.escape(str(f.get("account", "?"))) for f in failed if isinstance(f, dict)
+    """RED 'incomplete scan' banner (Anna's styling) naming the affected account(s)
+    — those that FAILED (timed out / stalled, contributed nothing) or were CAPPED
+    (read but older in-window mail may be unread). Built ENTIRELY from the Python-
+    written marker (account name, HTML-escaped) — no model output flows into it, so an
+    injected 'hide the warning' instruction cannot remove it and the account name
+    cannot smuggle markup. No script (CSP-safe). Load-bearing (asserted):
+    id="pulse-scan-warning", the string "INCOMPLETE SCAN", and the escaped account
+    name(s) as visible text."""
+    failed = [
+        html.escape(str(f.get("account", "?")))
+        for f in (info.get("accounts_failed") or []) if isinstance(f, dict)
     ]
+    capped = [
+        html.escape(str(c.get("account", "?")))
+        for c in (info.get("accounts_capped") or []) if isinstance(c, dict)
+    ]
+    escaped = failed + capped
     names = ", ".join(escaped) or "one or more accounts"
-    # Pluralize the copy on the count of skipped accounts (Anna's tone/markup kept).
+    # "is missing" when mail is definitely absent (failures only); "may be missing"
+    # once any account was CAPPED (older in-window mail may or may not exist).
+    verb = "is" if not capped else "may be"
     tail = (
-        "That account timed out and was skipped this run"
+        "That account was not fully read this run (timed out or read-capped)"
         if len(escaped) == 1
-        else "Those accounts timed out and were skipped this run"
+        else "Those accounts were not fully read this run (timed out or read-capped)"
     )
     return (
         f'<div id="pulse-scan-warning" role="alert" style="{_BANNER_BASE}'
@@ -237,7 +246,7 @@ def _incomplete_banner(info: dict) -> str:
         '<line x1="12" y1="9.2" x2="12" y2="14.4" stroke="#A4161A" stroke-width="2.2" '
         'stroke-linecap="round"/><circle cx="12" cy="17.4" r="1.25" fill="#A4161A"/></svg>'
         f'<span style="{_BANNER_CODE}">INCOMPLETE SCAN</span>'
-        '<span style="font-weight:500;"><strong style="font-weight:700;">This pulse is '
+        f'<span style="font-weight:500;"><strong style="font-weight:700;">This pulse {verb} '
         f'missing mail from</strong> <span style="{_BANNER_ACCOUNTS}">{names}</span>. '
         f"{tail} &mdash; treat the pulse below as partial.</span></div>"
     )

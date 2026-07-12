@@ -44,6 +44,7 @@ from pathlib import Path
 from config import (
     MAX_READ_BODY_LEN,
     MIN_BODY_CHARS,
+    READ_MAX_MESSAGES_PER_ACCOUNT,
     read_allowed_accounts,
     read_known_senders_with_source,
     read_personal_domains,
@@ -246,18 +247,38 @@ class ReadMailDriver:
             accounts.append(MailAccount(name=name.strip(), email=email.strip()))
         return accounts
 
-    def read_inbox(self, account_name: str, cutoff: str) -> list[tuple[str, str, str, str]]:
-        """Read ONE named account's inbox, bounded by cutoff (delta scan).
+    def read_inbox(
+        self, account_name: str, cutoff: str
+    ) -> tuple[list[tuple[str, str, str, str]], bool]:
+        """Read ONE named account's inbox, newest-first, bounded by the cutoff AND
+        the per-account message ceiling (config.READ_MAX_MESSAGES_PER_ACCOUNT).
 
-        Returns raw (sender, subject, date, body) tuples — base64-free; the
-        AppleScript control-char framing is decoded here. No filtering/skip
-        logic here (that's read_apple_mail's job, so it can be logged centrally).
+        Returns (records, saturated):
+          - records:   raw (sender, subject, date, body) tuples for in-window
+                       messages — the AppleScript control-char framing is decoded
+                       here; no filtering/skip logic (that's read_apple_mail's job).
+          - saturated: True iff the read hit the ceiling BEFORE passing the cutoff,
+                       i.e. older in-window mail may be unread. read_apple_mail then
+                       surfaces the account as CAPPED (partial) — never a silent
+                       truncation (COND-5).
+
+        Output format: a META header line `saturated(0|1) US total`, then the
+        GS-framed records — split on the FIRST newline (META vs records). The META
+        line is unspoofable: message bodies (which may carry newlines) all appear
+        AFTER it, and the script emits it before any record.
         """
-        out = self._run(READ_ACCOUNT_SCRIPT, [account_name, cutoff])
+        out = self._run(
+            READ_ACCOUNT_SCRIPT,
+            [account_name, cutoff, str(READ_MAX_MESSAGES_PER_ACCOUNT)],
+        )
+        # META header (before the first newline) vs the record stream (after it).
+        meta, _, stream = out.partition("\n")
+        saturated = meta.split(_US, 1)[0].strip() == "1"
+
         records: list[tuple[str, str, str, str]] = []
-        if not out.strip():
-            return records
-        for rec in out.split(_GS):
+        if not stream.strip():
+            return records, saturated
+        for rec in stream.split(_GS):
             if rec == "":
                 continue
             fields = rec.split(_US)
@@ -266,7 +287,7 @@ class ReadMailDriver:
                 fields.append("")
             sender, subject, date, body = fields[0], fields[1], fields[2], fields[3]
             records.append((sender, subject, date, body))
-        return records
+        return records, saturated
 
 
 # --------------------------------------------------------------------------- #
@@ -281,7 +302,11 @@ def _log(entry: dict, path: str | None = None) -> None:
 
 
 def _write_scan_status(
-    status: str, accounts_failed: list[dict], cutoff: str, path: str
+    status: str,
+    accounts_failed: list[dict],
+    accounts_capped: list[dict],
+    cutoff: str,
+    path: str,
 ) -> None:
     """Overwrite the machine-readable LAST-SCAN integrity marker (COND-5 backstop).
 
@@ -302,6 +327,9 @@ def _write_scan_status(
         "status": status,
         "accounts_failed": [
             {"account": f["account"], "domain": f["domain"]} for f in accounts_failed
+        ],
+        "accounts_capped": [
+            {"account": c["account"], "domain": c["domain"]} for c in accounts_capped
         ],
         "cutoff": cutoff,
         "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(),
@@ -344,15 +372,18 @@ def read_apple_mail(
           "messages": [ {account, sender, subject, date, body}, ... ],
           "accounts_read":   [account names read successfully this run],
           "accounts_failed": [ {account, domain, reason}, ... ],  # per-account read
-                             #   TIMEOUTS degraded (skipped) this run
+                             #   failures degraded (skipped) this run (timeout/stall)
+          "accounts_capped": [ {account, domain}, ... ],  # read hit the per-account
+                             #   message ceiling; OLDER in-window mail may be unread
           "accounts_skipped_dark": [ {name, domain}, ... ],  # ships-dark personal
           "cutoff": "<normalized cutoff>",  # RUN TOKEN — matches the status marker;
                                             # stamp it into the saved pulse so the
                                             # viewer can correlate marker <-> pulse.
         }
-    status is "partial" iff at least one allow-listed account's read TIMED OUT and
-    was skipped while others still returned — the caller MUST surface a partial
-    scan PROMINENTLY (never render it as a complete pulse). "ok" otherwise.
+    status is "partial" iff at least one allow-listed account either FAILED (timeout/
+    stall, skipped) or was CAPPED (read but older in-window mail may be unread) while
+    others still returned — the caller MUST surface a partial scan PROMINENTLY (never
+    render it as a complete pulse). "ok" otherwise.
 
     COND-8: a non-allow-listed account is never passed to the read script — its
     inbox is never enumerated, zero message reads. Fail closed: if the allow-list
@@ -403,12 +434,13 @@ def read_apple_mail(
         )
         # Clear/overwrite the integrity marker: this run read nothing by policy,
         # which is a clean (not degraded) state — a prior "partial" must not linger.
-        _write_scan_status("ok", [], cutoff, status_path)
+        _write_scan_status("ok", [], [], cutoff, status_path)
         return {
             "status": "ok",
             "messages": [],
             "accounts_read": [],
             "accounts_failed": [],
+            "accounts_capped": [],
             "accounts_skipped_dark": [],
             "cutoff": cutoff,  # run token: stamp into the saved pulse (viewer correlates)
         }
@@ -490,10 +522,11 @@ def read_apple_mail(
     # below — never presented as a clean success.
     accounts_read: list[str] = []
     accounts_failed: list[dict] = []
+    accounts_capped: list[dict] = []
     for acct in read_accts:
         is_personal = acct.domain in personal_domains
         try:
-            raw = driver.read_inbox(acct.name, cutoff)
+            raw, saturated = driver.read_inbox(acct.name, cutoff)
         except ReadMailError as exc:
             # WS1 (per-account failure isolation) — PENDING FLOYD RE-RATIFICATION.
             # ANY error from a SINGLE account's read_inbox degrades THAT account
@@ -528,6 +561,26 @@ def read_apple_mail(
             continue
 
         accounts_read.append(acct.name)
+
+        # CAP (COND-5): the read hit the per-account ceiling before passing the
+        # cutoff, so OLDER in-window mail may be unread. Surface the account as
+        # CAPPED (the scan is marked partial) — never a silent truncation. C1: log
+        # account name + domain only, never message content.
+        if saturated:
+            accounts_capped.append({"account": acct.name, "domain": acct.domain})
+            _log(
+                {
+                    "event": "read_account_capped",
+                    "account": acct.name,
+                    "domain": acct.domain,
+                    "cap": READ_MAX_MESSAGES_PER_ACCOUNT,
+                    "alert": "READ CAP reached for an allow-listed account — the "
+                    "newest in-window messages were read, but OLDER in-window mail "
+                    "may be unread. Scan marked PARTIAL (capped); surfaced to the "
+                    "human, NOT presented as a complete scan.",
+                },
+                log_path,
+            )
 
         kept = 0
         skipped_blank = 0
@@ -625,7 +678,10 @@ def read_apple_mail(
             "(COND-5: not an empty success)."
         )
 
-    status = "partial" if accounts_failed else "ok"
+    # COND-5: a partial scan is any account that failed (timeout/stall) OR was
+    # CAPPED (read but older in-window mail may be unread). Either way the scan is
+    # incomplete and must never be presented as clean.
+    status = "partial" if (accounts_failed or accounts_capped) else "ok"
 
     _log(
         {
@@ -633,6 +689,7 @@ def read_apple_mail(
             "status": status,
             "accounts_read": accounts_read,
             "accounts_failed": [f["account"] for f in accounts_failed],
+            "accounts_capped": [c["account"] for c in accounts_capped],
             "accounts_skipped_dark": [a["name"] for a in skipped_dark_accts],
             "total_messages": len(results),
             "cutoff": cutoff,
@@ -641,12 +698,13 @@ def read_apple_mail(
     )
     # COND-5 structural backstop: record this scan's integrity status where
     # pulse-server can inject the partial-scan banner independent of the model.
-    _write_scan_status(status, accounts_failed, cutoff, status_path)
+    _write_scan_status(status, accounts_failed, accounts_capped, cutoff, status_path)
     return {
         "status": status,
         "messages": results,
         "accounts_read": accounts_read,
         "accounts_failed": accounts_failed,
+        "accounts_capped": accounts_capped,
         "accounts_skipped_dark": skipped_dark_accts,
         "cutoff": cutoff,  # run token: stamp into the saved pulse (viewer correlates)
     }

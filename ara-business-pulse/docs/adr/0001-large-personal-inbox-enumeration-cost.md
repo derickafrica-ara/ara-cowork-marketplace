@@ -1,9 +1,18 @@
 # ADR 0001 — Large personal-inbox enumeration cost (~90s AppleScript scan)
 
-- **Status:** Proposed (recommendation for Derick + Floyd; no full rework built yet)
+- **Status:** ACCEPTED — Option A (message-count cap) implemented in **0.3.3**.
 - **Date:** 2026-07-11
 - **Component:** `ara-business-pulse` — `apple-mail/` read path
 - **Related:** WS1 (per-account stall degrade)
+
+> **Update (0.3.3):** Option A is now shipped. `read_account.applescript` reads the
+> inbox NEWEST-FIRST by index up to `config.READ_MAX_MESSAGES_PER_ACCOUNT` (500),
+> stopping at the cutoff (complete) or the ceiling (saturated); `read_core` surfaces
+> a saturated account as CAPPED (`accounts_capped`, `status: "partial"`, banner) —
+> never a silent truncation (COND-5). The ~90s enumeration timeout is eliminated in
+> the logic; **the speed win itself is confirmed only by a live run on the large
+> personal inboxes** (mocks can't measure it). Option D (provider API) remains the
+> strategic follow-up behind a Floyd threat-model review.
 
 ## Context — the root cost
 

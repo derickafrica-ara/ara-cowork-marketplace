@@ -39,12 +39,16 @@ class FakeReadMailDriver(ReadMailDriver):
         timeout_accounts: set[str] | None = None,
         error_accounts: set[str] | None = None,
         list_accounts_error: bool = False,
+        saturated_accounts: set[str] | None = None,
     ):
         super().__init__()
         self._world = world
         self._timeout_accounts = set(timeout_accounts or ())
         self._error_accounts = set(error_accounts or ())
         self._list_accounts_error = list_accounts_error
+        # Accounts whose read hit the per-account ceiling (CAP): read_inbox returns
+        # saturated=True (older in-window mail may be unread => read_core flags CAPPED).
+        self._saturated_accounts = set(saturated_accounts or ())
         self.list_accounts_calls = 0
         self.read_calls: list[str] = []  # account names read_inbox was called on
         self.read_cutoffs: list[str] = []
@@ -79,6 +83,7 @@ class FakeReadMailDriver(ReadMailDriver):
                 f"for {account_name!r}"
             )
         info = self._world.get(account_name)
+        saturated = account_name in self._saturated_accounts
         if info is None:
-            return []
-        return list(info.get("messages", []))
+            return [], saturated
+        return list(info.get("messages", [])), saturated
