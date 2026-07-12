@@ -9,9 +9,10 @@
 > the NEWEST `min(total, config.READ_MAX_MESSAGES_PER_ACCOUNT)` (500) messages by
 > index (dates bulk-fetched in one round-trip) and returns EVERY in-window one —
 > ordering-independent, no early stop (R-SAFE, closing the interleaved-message silent
-> drop). `read_core` makes the completeness DECISION in unit-tested Python
-> (`_is_saturated` = examined the full ceiling AND no examined message was out of
-> window) and surfaces a saturated account as CAPPED (`accounts_capped`,
+> drop). `read_core` makes the completeness DECISION in unit-tested Python via a
+> BOUNDARY rule (`_is_saturated` = `total > examined` AND the oldest-by-index
+> examined message is still in-window) and surfaces a saturated account as CAPPED
+> (`accounts_capped`,
 > `status: "partial"`, banner) — never a silent truncation (COND-5). The ~90s
 > enumeration timeout is eliminated in the logic; **the raw osascript speed and
 > Mail's index-ordering are confirmed only by a live run** (mocks can't measure them

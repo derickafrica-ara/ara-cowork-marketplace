@@ -24,8 +24,8 @@
 --     in-window mail sitting behind such a message).
 --   * The SATURATION/COMPLETENESS DECISION is NOT made here — this script returns
 --     the in-window records plus the raw metadata Python needs (examined count,
---     whether any examined message was OUT of window, total count) and read_core
---     (unit-tested Python) decides `saturated`.
+--     whether the OLDEST-BY-INDEX examined message is still in window, total count)
+--     and read_core (unit-tested Python) decides `saturated`.
 --   * SPEED: the newest range's dates are bulk-fetched in ONE osascript round-trip
 --     (`date received of messages lo thru hi`), not `ceiling` individual
 --     `message idx` accesses — bounded to O(ceiling) work, no O(inbox) `whose` walk.
@@ -40,7 +40,7 @@
 --   item 3 : ceiling — max messages to examine (integer as text)
 --
 -- Output framing:
---   * FIRST a META line: `examined US saw_out_of_window(0|1) US total`, terminated
+--   * FIRST a META line: `examined US boundary_in_window(0|1) US total`, terminated
 --     by the FIRST newline. Emitted BEFORE any record; message bodies (which may
 --     contain newlines) all appear AFTER it, so a crafted body cannot spoof it.
 --   * THEN the in-window message records: fields separated by US (0x1F), records by
@@ -74,7 +74,7 @@ on run argv
 	set gs to (ASCII character 29)
 	set outRecords to {}
 	set examined to 0
-	set sawOutOfWindow to false
+	set boundaryInWindow to false
 	set totalCount to 0
 
 	tell application "Mail"
@@ -136,22 +136,32 @@ on run argv
 					end try
 					set rec to (my stripCtrl(theSender)) & us & (my stripCtrl(theSubject)) & us & (my stripCtrl(theDate)) & us & (my stripCtrl(theBody))
 					set end of outRecords to rec
-				else
-					-- Out of window. Recorded (not collected). We do NOT early-stop —
-					-- every examined message is checked, so an interleaved out-of-window
-					-- message cannot truncate the in-window collection.
-					set sawOutOfWindow to true
 				end if
+				-- No else / no early-stop: every examined message is checked, so an
+				-- interleaved out-of-window message cannot truncate the collection.
 			end repeat
+
+			-- BOUNDARY signal (Floyd's R-SAFE saturation rule): is the OLDEST-BY-INDEX
+			-- examined message (the far end of the examined range) STILL in window? If
+			-- so, the cutoff falls BEYOND what we examined, so in-window mail may sit
+			-- among the unexamined messages (Python flags CAPPED when total > examined).
+			-- Free — it's just the far end of the dList we already fetched. Undated =>
+			-- treated as in-window (conservative: flag rather than risk a silent miss).
+			if newestIsFirst then
+				set boundaryDate to (item nFetched of dList)
+			else
+				set boundaryDate to (item 1 of dList)
+			end if
+			set boundaryInWindow to ((boundaryDate is missing value) or (boundaryDate > cutoffDate))
 		end if
 	end tell
 
-	-- META: examined US saw_out_of_window(0|1) US total. The completeness DECISION
-	-- (saturated = examined >= ceiling AND not saw_out_of_window) is made in
-	-- read_core (unit-tested Python), NOT here.
-	set sowField to "0"
-	if sawOutOfWindow then set sowField to "1"
-	set metaLine to (examined as text) & us & sowField & us & (totalCount as text)
+	-- META: examined US boundary_in_window(0|1) US total. The completeness DECISION
+	-- (saturated = total > examined AND boundary_in_window) is made in read_core
+	-- (unit-tested Python), NOT here.
+	set biwField to "0"
+	if boundaryInWindow then set biwField to "1"
+	set metaLine to (examined as text) & us & biwField & us & (totalCount as text)
 
 	set AppleScript's text item delimiters to gs
 	set outText to outRecords as text

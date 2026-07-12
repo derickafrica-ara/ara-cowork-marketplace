@@ -1,13 +1,16 @@
 """Unit tests for the R-SAFE cap: (1) ReadMailDriver.read_inbox parsing the
-read_account.applescript output, and (2) the ordering-INDEPENDENT completeness
-DECISION `_is_saturated` (moved out of the untested AppleScript into Python).
+read_account.applescript output, and (2) the BOUNDARY-based completeness DECISION
+`_is_saturated` (moved out of the untested AppleScript into Python).
 
 Output format: `META\\n<GS-framed records>` where META =
-`examined US saw_out_of_window(0|1) US total`.
+`examined US boundary_in_window(0|1) US total`.
 
-The AppleScript itself (newest-first bulk fetch, timing) is live-only. This pins the
-PYTHON side of that contract — META decode, record framing, and the saturation
-decision — which is fully testable by stubbing the osascript boundary (_run).
+The AppleScript itself (newest-first bulk fetch, timing, the boundary date read) is
+live-only. This pins the PYTHON side of that contract — META decode, record framing,
+and the saturation decision — testable by stubbing the osascript boundary (_run).
+
+The saturation tests are written from the INVARIANT, NOT from the code's behavior:
+  if in-window mail could exist that we did NOT examine, `saturated` MUST be True.
 """
 
 from __future__ import annotations
@@ -41,30 +44,30 @@ def _rec(*fields: str) -> str:
     return _US.join(fields)
 
 
-def _meta(examined: int, saw_oow: int, total: int) -> str:
-    return f"{examined}{_US}{saw_oow}{_US}{total}"
+def _meta(examined: int, boundary_iw: int, total: int) -> str:
+    return f"{examined}{_US}{boundary_iw}{_US}{total}"
 
 
 class TestReadInboxParse(unittest.TestCase):
     def test_metadata_and_records_decoded(self):
-        out = _meta(2, 1, 1234) + "\n" + _GS.join([
+        out = _meta(500, 1, 12000) + "\n" + _GS.join([
             _rec("a@x.com", "Subj1", "2026-07-11 07:00:00", "body one"),
             _rec("b@y.com", "Subj2", "2026-07-11 06:30:00", "body two"),
         ])
-        records, examined, saw_oow, total = _StubDriver(out).read_inbox("ARA", "cut")
-        self.assertEqual(examined, 2)
-        self.assertTrue(saw_oow)
-        self.assertEqual(total, 1234)
+        records, examined, boundary_iw, total = _StubDriver(out).read_inbox("ARA", "cut")
+        self.assertEqual(examined, 500)
+        self.assertTrue(boundary_iw)
+        self.assertEqual(total, 12000)
         self.assertEqual(len(records), 2)
         self.assertEqual(records[0], ("a@x.com", "Subj1", "2026-07-11 07:00:00", "body one"))
 
     def test_empty_stream_meta_only(self):
-        records, examined, saw_oow, total = _StubDriver(_meta(0, 0, 0) + "\n").read_inbox("ARA", "x")
+        records, examined, boundary_iw, total = _StubDriver(_meta(0, 0, 0) + "\n").read_inbox("ARA", "x")
         self.assertEqual(records, [])
-        self.assertEqual((examined, saw_oow, total), (0, False, 0))
+        self.assertEqual((examined, boundary_iw, total), (0, False, 0))
 
     def test_short_record_is_padded_to_four_fields(self):
-        out = _meta(1, 1, 1) + "\n" + _rec("a@x.com", "Subj")  # only 2 fields
+        out = _meta(1, 0, 1) + "\n" + _rec("a@x.com", "Subj")  # only 2 fields
         records, *_ = _StubDriver(out).read_inbox("ARA", "x")
         self.assertEqual(records, [("a@x.com", "Subj", "", "")])
 
@@ -73,14 +76,14 @@ class TestReadInboxParse(unittest.TestCase):
         # delimiter (the FIRST newline separates META from the record stream).
         body = "line1\nline2\nline3"
         out = _meta(9, 0, 9) + "\n" + _rec("a@x.com", "S", "2026-07-11 07:00:00", body)
-        records, examined, saw_oow, _ = _StubDriver(out).read_inbox("ARA", "x")
+        records, examined, boundary_iw, _ = _StubDriver(out).read_inbox("ARA", "x")
         self.assertEqual(examined, 9)
-        self.assertFalse(saw_oow)
+        self.assertFalse(boundary_iw)
         self.assertEqual(records[0][3], body)  # body preserved intact
 
     def test_garbage_meta_defaults_defensively(self):
-        records, examined, saw_oow, total = _StubDriver("junk\n").read_inbox("ARA", "x")
-        self.assertEqual((examined, saw_oow, total), (0, False, 0))
+        records, examined, boundary_iw, total = _StubDriver("junk\n").read_inbox("ARA", "x")
+        self.assertEqual((examined, boundary_iw, total), (0, False, 0))
         self.assertEqual(records, [])
 
     def test_ceiling_is_passed_to_osascript(self):
@@ -91,33 +94,37 @@ class TestReadInboxParse(unittest.TestCase):
 
 
 class TestIsSaturated(unittest.TestCase):
-    """The ordering-independent completeness decision (Floyd's R-SAFE rule):
-    saturated iff examined >= ceiling AND no examined message was out of window."""
+    """Boundary rule: saturated = (total > examined) AND boundary_in_window.
+    Written from the INVARIANT: if in-window mail could exist beyond what we
+    examined, `saturated` MUST be True."""
 
-    CEIL = 500
+    CEIL = 500  # examined == ceiling in the >ceiling-inbox cases below
 
-    def test_ceiling_hit_all_in_window_is_saturated(self):
-        # Examined the full ceiling and even the boundary was still in-window =>
-        # in-window mail may exist beyond the ceiling => CAPPED.
-        self.assertTrue(_is_saturated(self.CEIL, saw_out_of_window=False, ceiling=self.CEIL))
-
-    def test_interleaved_boundary_seen_is_not_saturated(self):
-        # THE silent-drop case, now closed: examined the ceiling but at least one
-        # examined message was OUT of window (e.g. an interleaved old message) => the
-        # window boundary was reached; the collection (no early stop) already has
-        # every in-window message => COMPLETE, not capped.
-        self.assertFalse(_is_saturated(self.CEIL, saw_out_of_window=True, ceiling=self.CEIL))
+    def test_busy_inbox_boundary_in_window_is_saturated(self):
+        # THE corner: a >ceiling-in-window day (± an interleaved out-of-order old
+        # message anywhere in the examined range). We examined the full ceiling,
+        # there is more mail beyond it (total > examined), and the FAR-END boundary
+        # of the examined range is still in window => in-window mail may sit beyond
+        # the ceiling => MUST be saturated (this is the case the old rule missed).
+        self.assertTrue(_is_saturated(self.CEIL, boundary_in_window=True, total=12000))
 
     def test_small_delta_on_huge_inbox_not_falsely_capped(self):
-        # A small 24h delta on a years-large inbox: we examine the ceiling but hit
-        # out-of-window messages among the newest => complete, NOT falsely capped.
-        self.assertFalse(_is_saturated(self.CEIL, saw_out_of_window=True, ceiling=self.CEIL))
+        # Small 24h delta on a years-large inbox: we examined the ceiling, more mail
+        # exists beyond it, but the far-end boundary is already OUT of window => the
+        # delta ended within the examined range => complete, NOT falsely capped.
+        self.assertFalse(_is_saturated(self.CEIL, boundary_in_window=False, total=12000))
 
     def test_whole_inbox_examined_is_complete(self):
-        # Examined fewer than the ceiling => we saw the ENTIRE inbox => complete,
-        # regardless of whether a boundary message existed.
-        self.assertFalse(_is_saturated(42, saw_out_of_window=False, ceiling=self.CEIL))
-        self.assertFalse(_is_saturated(0, saw_out_of_window=False, ceiling=self.CEIL))
+        # Examined the ENTIRE inbox (total <= examined) => nothing unexamined =>
+        # complete, regardless of the boundary flag.
+        self.assertFalse(_is_saturated(42, boundary_in_window=True, total=42))
+        self.assertFalse(_is_saturated(42, boundary_in_window=False, total=42))
+        self.assertFalse(_is_saturated(0, boundary_in_window=False, total=0))
+
+    def test_total_equals_examined_at_ceiling_not_capped(self):
+        # Edge: exactly ceiling messages in the inbox — examined all of them =>
+        # total > examined is False => complete (no false-cap at total == ceiling).
+        self.assertFalse(_is_saturated(self.CEIL, boundary_in_window=True, total=self.CEIL))
 
 
 if __name__ == "__main__":

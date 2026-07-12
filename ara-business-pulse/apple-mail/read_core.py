@@ -190,21 +190,25 @@ def _to_int(s: str) -> int:
         return 0
 
 
-def _is_saturated(examined: int, saw_out_of_window: bool, ceiling: int) -> bool:
-    """COND-5 completeness DECISION (ordering-INDEPENDENT; unit-tested).
+def _is_saturated(examined: int, boundary_in_window: bool, total: int) -> bool:
+    """COND-5 completeness DECISION (BOUNDARY rule; unit-tested from the INVARIANT).
 
-    The reader examined the newest `examined` = min(total, ceiling) messages by index
-    and collected EVERY in-window one among them, regardless of order (no early stop).
-    So the window is fully covered — the read is COMPLETE — UNLESS BOTH:
-      (a) we examined the full ceiling (there are more messages we did NOT reach), AND
-      (b) NO examined message was out of window (even the boundary is still in-window),
-    in which case in-window mail may exist beyond the ceiling => CAPPED (saturated).
+    Invariant: if in-window mail could exist that we did NOT examine, `saturated` MUST
+    be True. The reader examined the newest `examined` = min(total, ceiling) messages
+    by index and collected EVERY in-window one among them (no early stop). There is
+    unexamined mail iff `total > examined`. The OLDEST-BY-INDEX examined message (the
+    far end of the examined range) is the window boundary: if it is STILL in-window
+    (`boundary_in_window`), the cutoff falls BEYOND the examined range, so in-window
+    mail may sit among the unexamined messages => CAPPED.
 
-    This kills the false-capped case (a small delta on a huge inbox: saw_out_of_window
-    is True => complete) AND, with the reader's no-early-stop collection, the
-    single-interleave silent drop (an out-of-window message can no longer truncate).
+    Complete (not saturated) otherwise: we examined the whole inbox (`total <=
+    examined`), OR the far-end boundary is already out of window (the delta ended
+    within the examined range — so a small delta on a huge inbox is never falsely
+    capped). This is order-robust: it does NOT rely on "we saw some out-of-window
+    message" (which a single interleaved message could satisfy while in-window mail
+    still sits beyond the ceiling).
     """
-    return examined >= ceiling and not saw_out_of_window
+    return total > examined and boundary_in_window
 
 
 # --------------------------------------------------------------------------- #
@@ -280,16 +284,18 @@ class ReadMailDriver:
         among them (ordering-independent — NO early stop, so an interleaved
         out-of-window message cannot truncate the collection).
 
-        Returns (records, examined, saw_out_of_window, total):
+        Returns (records, examined, boundary_in_window, total):
           - records:            in-window (sender, subject, date, body) tuples — the
                                 AppleScript control-char framing is decoded here.
           - examined:           how many messages were examined (min(total, ceiling)).
-          - saw_out_of_window:  True iff ANY examined message was out of window.
-          - total:              total messages in the inbox (informational).
-        read_apple_mail decides `saturated`/CAPPED from these via _is_saturated() —
-        the completeness DECISION lives in unit-tested Python, not the AppleScript.
+          - boundary_in_window: True iff the OLDEST-BY-INDEX examined message (the far
+                                end of the examined range) is still in window.
+          - total:              total messages in the inbox.
+        read_apple_mail decides `saturated`/CAPPED from these via _is_saturated()
+        (saturated = total > examined AND boundary_in_window) — the completeness
+        DECISION lives in unit-tested Python, not the AppleScript.
 
-        Output format: META `examined US saw_out_of_window US total`, then the
+        Output format: META `examined US boundary_in_window US total`, then the
         GS-framed records — split on the FIRST newline (META vs records). The META
         line is unspoofable: message bodies (which may carry newlines) all appear
         AFTER it, and the script emits it before any record.
@@ -302,7 +308,7 @@ class ReadMailDriver:
         meta, _, stream = out.partition("\n")
         meta_fields = meta.split(_US)
         examined = _to_int(meta_fields[0]) if len(meta_fields) > 0 else 0
-        saw_out_of_window = (
+        boundary_in_window = (
             meta_fields[1].strip() == "1" if len(meta_fields) > 1 else False
         )
         total = _to_int(meta_fields[2]) if len(meta_fields) > 2 else 0
@@ -317,7 +323,7 @@ class ReadMailDriver:
                 while len(fields) < 4:
                     fields.append("")
                 records.append((fields[0], fields[1], fields[2], fields[3]))
-        return records, examined, saw_out_of_window, total
+        return records, examined, boundary_in_window, total
 
 
 # --------------------------------------------------------------------------- #
@@ -555,7 +561,7 @@ def read_apple_mail(
     for acct in read_accts:
         is_personal = acct.domain in personal_domains
         try:
-            raw, examined, saw_out_of_window, total = driver.read_inbox(acct.name, cutoff)
+            raw, examined, boundary_in_window, total = driver.read_inbox(acct.name, cutoff)
         except ReadMailError as exc:
             # WS1 (per-account failure isolation, ratified at Floyd's omnibus gate).
             # ANY error from a SINGLE account's read_inbox degrades THAT account
@@ -594,11 +600,11 @@ def read_apple_mail(
         # CAP (COND-5): the completeness DECISION is made HERE (testable Python), not
         # in the AppleScript. The reader examined the newest min(total, ceiling)
         # messages and collected EVERY in-window one regardless of order; it is
-        # saturated only if it examined the full ceiling AND even the boundary was
-        # still in-window (older in-window mail may be unread). Surface a saturated
-        # account as CAPPED (scan marked partial) — never a silent truncation. C1:
-        # log account name + domain + counts only, never message content.
-        if _is_saturated(examined, saw_out_of_window, READ_MAX_MESSAGES_PER_ACCOUNT):
+        # saturated iff there is unexamined mail (total > examined) AND the far-end
+        # boundary of the examined range is still in-window (in-window mail may sit
+        # beyond it). Surface a saturated account as CAPPED (scan marked partial) —
+        # never a silent truncation. C1: log account + domain + counts only.
+        if _is_saturated(examined, boundary_in_window, total):
             accounts_capped.append({"account": acct.name, "domain": acct.domain})
             _log(
                 {

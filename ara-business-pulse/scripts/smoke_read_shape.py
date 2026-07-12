@@ -8,17 +8,22 @@ runs WITHOUT the live MCP SDK and WITHOUT touching Apple Mail (a tiny in-process
 fake) and WITHOUT writing the real marker/run-log (temp dir).
 
 --live mode (Derick runs this post-publish; NEEDS real Mail + TCC) is the cap's
-ordering/completeness/SPEED probe (R-SAFE):
+boundary/completeness/SPEED probe (R-SAFE):
   * SPEED — times a real read; the ~90s per-account timeout should be gone.
-  * ORDERING/COMPLETENESS — prints messages-by-account; if newest-end detection were
-    wrong, personal accounts would read OLD messages and return ZERO recent mail, so
-    a personal account showing 0 (when recent mail exists) flags an ordering problem.
+  * BOUNDARY DECISION — with an account name, it reads that ONE account directly and
+    prints examined / total / boundary_in_window / in-window record count and the
+    resulting saturated/CAPPED verdict. This exercises the boundary DECISION itself,
+    not just "did the pulse return something".
   * No per-account timeout (accounts_failed empty) is the primary PASS signal.
+CAVEAT: a healthy-looking returned/message count does NOT prove completeness — the
+silent-miss class is an account that SHOULD be capped but isn't; watch
+`accounts_capped` and the boundary verdict, not the raw count.
 It uses a recent (3-day) cutoff and temp marker/log paths (never the real marker).
 
 Run:
-    python3 ara-business-pulse/scripts/smoke_read_shape.py            # offline
-    python3 ara-business-pulse/scripts/smoke_read_shape.py --live     # on Derick's Mac
+    python3 ara-business-pulse/scripts/smoke_read_shape.py                     # offline
+    python3 ara-business-pulse/scripts/smoke_read_shape.py --live             # full read
+    python3 ara-business-pulse/scripts/smoke_read_shape.py --live "iCloud"    # + boundary
 
 Exit 0 = PASS, 1 = FAIL/CHECK.
 """
@@ -47,14 +52,15 @@ DOCUMENTED_KEYS = {
 
 class _FakeDriver(ReadMailDriver):
     """Stand-in for Apple Mail — one ARA account, one message. No osascript.
-    read_inbox returns (records, examined, saw_out_of_window, total)."""
+    read_inbox returns (records, examined, boundary_in_window, total)."""
 
     def list_accounts(self):  # type: ignore[override]
         return [MailAccount(name="ARA", email="derick@ara-data.com")]
 
     def read_inbox(self, account_name, cutoff):  # type: ignore[override]
         recs = [("client@ara-data.com", "Subject", "2026-07-11 07:00:00", "body text")]
-        return recs, len(recs), True, len(recs)  # examined, saw_out_of_window, total
+        # examined == total => total > examined is False => complete (never capped).
+        return recs, len(recs), False, len(recs)  # examined, boundary_in_window, total
 
 
 def offline() -> int:
@@ -87,9 +93,25 @@ def offline() -> int:
     return 0 if ok else 1
 
 
-def live() -> int:
-    """Real read against Apple Mail — SPEED + ordering/completeness (R-SAFE)."""
+def live(account: str | None) -> int:
+    """Real read against Apple Mail — SPEED + boundary DECISION (R-SAFE)."""
+    from read_core import ReadMailDriver, _is_saturated  # local: needs osascript
     since = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Direct BOUNDARY observation for ONE named account: exercises the saturation
+    # decision itself. (Reads the named account directly — run it on YOUR own
+    # allow-listed account.)
+    if account:
+        recs, examined, boundary_in_window, total = ReadMailDriver().read_inbox(account, since)
+        sat = _is_saturated(examined, boundary_in_window, total)
+        print(f"[boundary] account={account!r} examined={examined} total={total} "
+              f"boundary_in_window={boundary_in_window} in_window_records={len(recs)} "
+              f"=> saturated/CAPPED={sat}")
+        print("[boundary] read: saturated=True => older in-window mail may be unread "
+              "(raise the ceiling or narrow the window); saturated=False with a recent "
+              "`since` should return your recent mail. A healthy record COUNT alone "
+              "does NOT prove completeness — the boundary verdict is the signal.")
+
     tmp = tempfile.mkdtemp()
     t0 = time.monotonic()
     res = read_apple_mail(  # real ReadMailDriver; temp paths => no real marker/log
@@ -104,9 +126,10 @@ def live() -> int:
     print(f"[live] accounts_failed = {[f['account'] for f in res['accounts_failed']]}")
     print(f"[live] accounts_capped = {[c['account'] for c in res['accounts_capped']]}")
     print(f"[live] messages_by_account = {dict(by_acct)}  (total {len(res['messages'])})")
-    print("[live] ORDERING/COMPLETENESS: a personal account showing 0 messages when "
-          "you expect recent known-sender mail would indicate a newest-end/ordering "
-          "problem — eyeball the per-account counts above.")
+    print("[live] COMPLETENESS: a healthy message count does NOT prove completeness — "
+          "the silent-miss class is an account that SHOULD be capped but is not. Watch "
+          "`accounts_capped`; for a busy account, pass its name to observe the boundary "
+          "verdict above.")
     # Primary PASS: no per-account read timed out or stalled (the 90s bug is gone).
     ok = not res["accounts_failed"]
     print("PASS: real read completed with no per-account timeout/stall." if ok else
@@ -115,4 +138,8 @@ def live() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(live() if "--live" in sys.argv[1:] else offline())
+    _args = sys.argv[1:]
+    if "--live" in _args:
+        _rest = [a for a in _args if a != "--live"]
+        sys.exit(live(_rest[0] if _rest else None))
+    sys.exit(offline())

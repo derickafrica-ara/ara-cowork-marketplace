@@ -86,10 +86,11 @@ class FakeReadMailDriver(ReadMailDriver):
         info = self._world.get(account_name)
         records = list(info.get("messages", [])) if info else []
         if account_name in self._saturated_accounts:
-            # Model a SATURATED read: examined the full ceiling and even the boundary
-            # was still in-window (saw_out_of_window=False) => _is_saturated True =>
-            # read_core flags the account CAPPED.
-            return records, READ_MAX_MESSAGES_PER_ACCOUNT, False, READ_MAX_MESSAGES_PER_ACCOUNT + 100
-        # Normal read: examined the returned records and DID see the window boundary
-        # (saw_out_of_window=True) => complete (never falsely capped).
-        return records, len(records), True, len(records)
+            # Model a SATURATED read: there is unexamined mail (total > examined) AND
+            # the far-end boundary of the examined range is still in window
+            # (boundary_in_window=True) => _is_saturated True => read_core flags CAPPED.
+            # (records, examined, boundary_in_window, total)
+            return records, READ_MAX_MESSAGES_PER_ACCOUNT, True, READ_MAX_MESSAGES_PER_ACCOUNT + 100
+        # Normal read: examined the whole inbox (total == examined) => complete
+        # (total > examined is False) => never falsely capped.
+        return records, len(records), False, len(records)

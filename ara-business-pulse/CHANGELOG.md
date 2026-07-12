@@ -19,9 +19,12 @@ inbox 90s timeouts that 0.3.2 made survivable but did not eliminate.
   stop at the first out-of-window message (which could otherwise silently drop
   in-window mail behind it).
 - **Cap saturation is surfaced, never silently truncated (COND-5).** The account is
-  flagged CAPPED only when it examined the full ceiling AND every examined message
-  was still in-window (older in-window mail may exist beyond the ceiling) — the
-  completeness decision is made in unit-tested Python. A capped account is named in
+  flagged CAPPED when there is unexamined mail (more messages than it examined) AND
+  the OLDEST-by-index examined message is still in-window — i.e. the window extends
+  past the examined range, so in-window mail may sit beyond it. This boundary rule
+  (decision in unit-tested Python) is order-robust: a busy day with >500 in-window
+  messages is flagged even if an out-of-order message is interleaved, and a small
+  delta on a huge inbox is never falsely capped. A capped account is named in
   `accounts_capped`, `status: "partial"`, and on the 8788 viewer's INCOMPLETE-SCAN
   banner. A busy day never silently drops mail while looking clean.
 - Preserved: COND-8 allow-list + fail-closed, the known-senders filter, the

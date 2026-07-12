@@ -115,9 +115,10 @@ def read_apple_mail(
       - It performs a BOUNDED DELTA scan: it examines the NEWEST min(total, CEILING)
         messages of each allow-listed INBOX by index and returns every in-window one
         (ordering-independent, no early stop) — O(ceiling), never the O(inbox) walk.
-        If it examined the full ceiling and even the boundary was still in-window,
-        older in-window mail may be unread: that account is named in `accounts_capped`
-        and the scan is `status: "partial"` (CAPPED — surfaced, never a silent
+        If there are more messages than it examined AND the oldest-by-index examined
+        message is still in-window (the window extends past the examined range), older
+        in-window mail may be unread: that account is named in `accounts_capped` and
+        the scan is `status: "partial"` (CAPPED — surfaced, never a silent
         truncation). It never enumerates every mailbox.
       - A message with a blank/partial (not-yet-downloaded) body is skipped and
         logged, never returned as a blank.
