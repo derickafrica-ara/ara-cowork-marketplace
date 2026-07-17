@@ -425,6 +425,11 @@ UNKNOWN"** rather than a clean pulse. (This only gates the viewer's clean-vs-unk
 state — the red INCOMPLETE banner is driven by the marker's status, not this token,
 so the token cannot hide a partial scan.)
 
+**Strip the template's documentation comments when saving.** When you SAVE the
+filled pulse HTML, remove the `<!-- ==== ... ==== -->` documentation-comment
+blocks copied from the template (template docs, not page content) — but **KEEP**
+the `<!-- ara-pulse-run: ... -->` token above.
+
 ### Step 3.5 — Render the digest as an inline visual artifact
 
 After saving the completed HTML file, render the digest inline in the current

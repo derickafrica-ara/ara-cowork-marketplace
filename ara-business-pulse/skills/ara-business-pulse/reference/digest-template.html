@@ -16,8 +16,9 @@
        1. Build the digest content as it already does (three categories, days-
           waiting numbers, calendar, dropbox, tasks) — content/structure is fixed.
        2. Fill the {{...}} slots below (Jinja2 or plain string substitution — the
-          loop blocks are also wrapped in <!-- REPEAT:name -->...<!-- /REPEAT:name -->
-          markers so a non-templated string-builder can clone rows).
+          loop blocks are also wrapped in REPEAT:name ... /REPEAT:name comment
+          markers so a non-templated string-builder can clone rows; spelled
+          without comment delimiters here so this doc comment stays balanced).
        3. Render to HTML for the on-screen / saved one-pager. (The Teams post is a
           SEPARATE, fixed Adaptive Card — see reference/teams-card.md.)
 
