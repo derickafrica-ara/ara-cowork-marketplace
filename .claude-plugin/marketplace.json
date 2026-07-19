@@ -7,7 +7,7 @@
     {
       "name": "ara-business-pulse",
       "source": "./ara-business-pulse",
-      "description": "ARA's morning Chief-of-Staff routine: read both ARA mailboxes, calendar, and Dropbox; produce a one-page business pulse; draft (never send) nudges; post one Teams digest."
+      "description": "ARA's morning Chief-of-Staff routine: read the ARA mailboxes (full) plus Gmail/iCloud (known-senders only) and iMessage (read-only, known contacts), with calendar and Dropbox; produce a one-page business pulse; draft (never send) nudges to allow-listed business domains only; post one Teams digest."
     }
   ]
 }

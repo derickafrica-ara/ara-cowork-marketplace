@@ -87,7 +87,7 @@ They are **not** pasted as env vars at install.
 | What | Where | Default | Secret? |
 |---|---|---|---|
 | Read account allow-list | `APPLE_MAIL_READ_ALLOWED_ACCOUNTS` (`.mcp.json` env) | `ara-data.com,ARAdata.onmicrosoft.com` | no |
-| Recipient allow-list (drafts) | `APPLE_MAIL_DRAFT_ALLOWED_DOMAINS` (`.mcp.json` env) | `ara-data.com` | no |
+| Recipient allow-list (drafts) | `APPLE_MAIL_DRAFT_ALLOWED_DOMAINS` (`.mcp.json` env) | `ara-data.com,falkecorp.com,falkehoa.com` — named domains only; code fail-closed default stays `ara-data.com` | no |
 | From-account allow-list (sender) | `APPLE_MAIL_DRAFT_FROM_ACCOUNTS` (`.mcp.json` env) | `ara-data.com,ARAdata.onmicrosoft.com` | no |
 | Dropbox project folder | collected on first run → `~/.ara-business-pulse/config.json` | `~/Library/CloudStorage/Dropbox/<project>` (Available offline) | no |
 | Teams webhook URL (**optional**) | collected on first run → `~/.ara-business-pulse/config.json` | *(per channel — skip to run without the Teams post)* | **YES — never commit** |

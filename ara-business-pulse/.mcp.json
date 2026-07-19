@@ -7,7 +7,7 @@
         "APPLE_MAIL_READ_ALLOWED_ACCOUNTS": "ara-data.com,ARAdata.onmicrosoft.com,gmail.com,me.com,icloud.com",
         "APPLE_MAIL_READ_PERSONAL_DOMAINS": "gmail.com,me.com,icloud.com",
         "APPLE_MAIL_READ_KNOWN_SENDERS": "",
-        "APPLE_MAIL_DRAFT_ALLOWED_DOMAINS": "ara-data.com",
+        "APPLE_MAIL_DRAFT_ALLOWED_DOMAINS": "ara-data.com,falkecorp.com,falkehoa.com",
         "APPLE_MAIL_DRAFT_FROM_ACCOUNTS": "ara-data.com,ARAdata.onmicrosoft.com"
       }
     }

@@ -1,5 +1,58 @@
 # Changelog — ara-business-pulse
 
+## 0.4.3
+
+Config + docs only — recipient-domain allow-list widened to named client domains
+(Derick's decision, 2026-07-18). No validation-logic change.
+
+- **What.** `APPLE_MAIL_DRAFT_ALLOWED_DOMAINS` (`.mcp.json` env) widened from
+  `ara-data.com` to `ara-data.com,falkecorp.com,falkehoa.com` — the two Falke
+  client domains, as an explicit NAMED-domain list (no wildcard, no "allow all").
+  Contract text updated to match (tool docstring, SKILL.md, README,
+  reference/config.md). The **from-account (sender) allow-list is UNCHANGED** —
+  drafts still compose only from the ARA business accounts. The **code
+  fail-closed default is UNCHANGED** (`ara-data.com` only): a deployment that
+  loses or empties its env narrows back to ARA-only, never widens.
+- **Why.** Client-bound drafts (e.g. to mfalke@falkecorp.com) were correctly
+  refused by the ARA-only list; Derick wants client-bound drafts stageable in
+  his Mail. Verified live 2026-07-18: the refusal fired fail-closed as designed
+  before this change.
+- **Threat considerations.** Widening recipients raises the value of a prompt
+  injection that composes a convincing client-bound draft (tool inputs may
+  originate from injection-capable scanned content). Accepted because the
+  structural control holds: the tool can ONLY `save` a draft — it cannot send;
+  a human must open Mail and click Send on exactly the body that was staged
+  (BODY-CLEAN — no marker/banner is possible in the draft body by design, so
+  human review of the draft itself IS the control). Defense in depth around it:
+  named-domain list only (lookalike/subdomain/suffix domains refused — exact
+  match), fail-closed code default preserved, from-account list untouched,
+  every attempt (created or rejected) audit-logged with full recipients in the
+  run-log, and the skill's COND-1 rule still forbids content-directed drafting.
+  Per Floyd's gate condition C-1, the skill REQUIRES the digest to name
+  client-bound drafts explicitly, per domain ("2 drafts staged to falkecorp.com
+  — review before sending") — the extra-care review surface BODY-CLEAN forbids
+  inside the draft itself.
+- **Go-live / restart (read this or the widen appears broken).** The env is
+  fixed at MCP-server spawn from the INSTALLED plugin's `.mcp.json` — a running
+  server keeps the old ARA-only list until it respawns. The change takes effect
+  only after the full chain: commit → push to the marketplace remote → update
+  the installed plugin to 0.4.3 → **restart the session / reload plugins** so
+  the apple-mail server respawns with the new env. Until then, client-bound
+  drafts are still (correctly) refused.
+
+## 0.4.2
+
+Fix — comment-close leak in the digest template: nested `-->` inside doc
+comments terminated the enclosing HTML comment early, leaking template
+commentary into rendered output. Docs/template only; no tool or
+validation-logic change. (Commit `4c1b8da`; entry backfilled at 0.4.3.)
+
+## 0.4.1
+
+P1 fix — `parseISO` month-rollover bug (Floyd gate delta 5): date arithmetic
+around month boundaries could produce a wrong cutoff. No security-contract
+change. (Commit `ef56c51`; entry backfilled at 0.4.3.)
+
 ## 0.4.0
 
 Personal mail moves to direct provider IMAP (COND-8 v0.4) — the real fix for the
