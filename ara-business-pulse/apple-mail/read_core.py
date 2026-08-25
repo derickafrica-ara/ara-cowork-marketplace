@@ -675,7 +675,7 @@ def read_apple_mail(
                     acct.name, cutoff
                 )
             except ReadMailError as exc:
-                # WS1 (per-account failure isolation, ratified at Floyd's omnibus
+                # WS1 (per-account failure isolation, ratified at the omnibus
                 # gate): a 90s subprocess TIMEOUT (ReadMailTimeout) OR a pre-timeout
                 # per-account STALL (rc!=0, e.g. AppleEvent -1712) degrades THIS
                 # account. Enumeration (list_accounts) already succeeded, so others

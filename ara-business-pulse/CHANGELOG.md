@@ -28,7 +28,7 @@ Config + docs only — recipient-domain allow-list widened to named client domai
   match), fail-closed code default preserved, from-account list untouched,
   every attempt (created or rejected) audit-logged with full recipients in the
   run-log, and the skill's COND-1 rule still forbids content-directed drafting.
-  Per Floyd's gate condition C-1, the skill REQUIRES the digest to name
+  Per the review gate's condition C-1, the skill REQUIRES the digest to name
   client-bound drafts explicitly, per domain ("2 drafts staged to <client-domain>
   — review before sending") — the extra-care review surface BODY-CLEAN forbids
   inside the draft itself.
@@ -49,7 +49,7 @@ validation-logic change. (Commit `4c1b8da`; entry backfilled at 0.4.3.)
 
 ## 0.4.1
 
-P1 fix — `parseISO` month-rollover bug (Floyd gate delta 5): date arithmetic
+P1 fix — `parseISO` month-rollover bug (review gate delta 5): date arithmetic
 around month boundaries could produce a wrong cutoff. No security-contract
 change. (Commit `ef56c51`; entry backfilled at 0.4.3.)
 
@@ -61,7 +61,7 @@ Apple Mail's AppleScript bridge costs ~1.8s per message touch (count/endpoints a
 cheap; any index/range access is not), so a daily ~60-message window needs ~108s —
 over budget regardless of the 0.3.3 cap. AppleScript is the wrong tool for large
 mailboxes; IMAP `SEARCH SINCE` is server-side date-indexed and returns the complete
-window in under a second. Floyd threat-review ratified (Rulings 1–2, R1–R29).
+window in under a second. Threat review ratified (Rulings 1–2, R1–R29).
 
 - **Personal accounts (gmail.com / me.com / icloud.com) now read DIRECTLY from the
   provider over TLS-validated IMAP** (hardcoded `imap.mail.me.com` /

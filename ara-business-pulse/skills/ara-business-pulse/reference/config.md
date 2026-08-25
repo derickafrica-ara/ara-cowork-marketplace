@@ -23,7 +23,7 @@ enforced **inside** the MCP server; you override only if a person differs. They 
 > reliable substitute** (named correspondents in, promo/transactional/2FA/newsletter
 > out) and it matches the iMessage known-contacts rule. It ships **fail-closed
 > (empty ⇒ personal reads nothing)**; populate `APPLE_MAIL_READ_KNOWN_SENDERS` to
-> turn personal mail on. This is Derick's decision to make — see Boris's finding memo.
+> turn personal mail on. This is Derick's decision to make — see the finding memo.
 
 **Group B — the two per-deployment values: collected by the skill on FIRST RUN,
 not at install.** The skill (SKILL.md Step 0.5) asks for these the first time it

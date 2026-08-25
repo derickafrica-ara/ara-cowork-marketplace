@@ -1,7 +1,7 @@
 # ADR 0001 — Large personal-inbox enumeration cost (~90s AppleScript scan)
 
 - **Status:** SUPERSEDED-IN-PART — **Option D (provider IMAP) ADOPTED for personal
-  accounts in 0.4.0** (Floyd threat review ratified, Rulings 1–2 + R1–R29);
+  accounts in 0.4.0** (threat review ratified, Rulings 1–2 + R1–R29);
   Option A (message-count cap, 0.3.3) RETAINED for the ARA business accounts.
 - **Date:** 2026-07-11 (0.4.0 update: 2026-07-12)
 - **Component:** `ara-business-pulse` — `apple-mail/` read path
@@ -17,7 +17,7 @@
 > TLS-validated, read-only IMAP (`imap_core.py`): server-side `UID SEARCH SINCE`
 > (date-indexed, sub-second), two-phase fetch (headers → known-senders filter →
 > bodies via BODY.PEEK), app-specific passwords Derick stores himself in the macOS
-> Keychain. **Floyd's threat review ratified this with compensating controls**
+> Keychain. **The threat review ratified this with compensating controls**
 > (hardcoded hosts, TLS ≥ 1.2 + system trust store, read-only verb set, EXAMINE +
 > PEEK, secret-hygiene prohibitions, one login attempt per scan, parser hardening,
 > per-connection audit). **Ruling 1:** the full-mailbox app password is acceptable
@@ -119,7 +119,7 @@ and return a delta in well under a second.
 - **Con:** biggest change — new auth (OAuth for Gmail; app-specific password /
   token for iCloud IMAP), new dependency and **new attack surface / secret
   storage**, and it **diverges from the COND-8 "read only what Mail already has
-  configured" privacy model** (a Floyd threat-model review would be required).
+  configured" privacy model** (a threat-model review would be required).
   IMAP for iCloud needs an app-specific password the user must mint.
 - **Risk:** high effort + new security surface; highest payoff.
 
@@ -135,7 +135,7 @@ first run) and WS1 (degrade on stall) as the safety net.
 
 **Revisit Option D (provider API) as the strategic direction** if the personal
 path becomes central and the cap's completeness tradeoff proves limiting — but only
-behind a Floyd threat-model review, because it adds authentication, secret storage,
+behind a threat-model review, because it adds authentication, secret storage,
 and a departure from the "Mail-configured accounts only" COND-8 model.
 
 Options B and C are **not recommended** on their own: B is too fragile across Mail

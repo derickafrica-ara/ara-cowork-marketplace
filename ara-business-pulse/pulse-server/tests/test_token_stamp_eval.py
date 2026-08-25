@@ -1,6 +1,6 @@
 """WS3 — lightweight headless eval: the skill MUST stamp the run token.
 
-Floyd's alarm-fatigue guard. If the skill stops stamping
+The alarm-fatigue guard. If the skill stops stamping
 `<!-- ara-pulse-run: {result["cutoff"]} -->` into the saved pulse HTML, the 8788
 viewer falls to a PERPETUAL amber "SCAN STATUS UNKNOWN" — training the eye to
 ignore the banner that matters. This eval guards that contract cheaply, in-suite,

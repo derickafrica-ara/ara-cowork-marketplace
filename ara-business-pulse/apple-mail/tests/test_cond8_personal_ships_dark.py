@@ -3,7 +3,7 @@
 Original defect (v0.3.1): a personal-scope account (Gmail/iCloud) that is
 allow-listed but has an EMPTY resolved known-senders list was still enumerated and
 only then filtered. The boundary skip fixed that; under v0.4's IMAP transport the
-guarantee is even stronger (Floyd R22): a ships-dark personal account triggers NO
+guarantee is even stronger (R22): a ships-dark personal account triggers NO
 IMAP transport call AT ALL — no Keychain read, no DNS, no connection, no auth.
 (The Keychain read lives inside PersonalImapDriver.read_personal, so "driver never
 invoked" structurally implies "Keychain never read".)

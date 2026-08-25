@@ -5,7 +5,7 @@ The digest is posted to the **one** configured Teams channel via the Workflows
 supported replacement; it accepts **Adaptive Cards**, not the legacy MessageCard
 format).
 
-This card is **ARA-branded** (designed by Anna, ARA) to match the firm's
+This card is **ARA-branded** to match the firm's
 established identity — **brand orange `#E2641B`** + the ARA wordmark — the same
 chrome as the bid-scorecard and the HTML digest one-pager
 (`reference/digest-template.html`). The structure is the SKILL's fixed three

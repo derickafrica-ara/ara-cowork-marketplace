@@ -2,17 +2,17 @@
 http://127.0.0.1:8788 with a Refresh button that triggers a headless
 Claude Code run of the ara-business-pulse skill.
 
-Design constraints (see README + Floyd gate report floyd-gate-pulse-server.md):
+Design constraints (see README + the pulse-server gate report):
 - SERVING and REFRESHING fail independently: the page always shows the last
   successful pulse; a broken refresh path only disables the button, never the view.
 - Bound to 127.0.0.1 ONLY. Never expose on the network.
 - The refresh command is a FIXED argv run with shell=False — not configurable,
-  not shell-interpreted (Floyd F3). Only pulse_html_dir is config-overridable.
+  not shell-interpreted (review gate F3). Only pulse_html_dir is config-overridable.
 - /status never returns raw CLI output (mail fragments can appear in error
-  tails — Floyd F5); full stderr goes to the refresh log file only.
+  tails — review gate F5); full stderr goes to the refresh log file only.
 - Every response carries a strict CSP so mail-derived pulse content cannot
-  script against the endpoints (Floyd F6); Host allowlist blocks DNS-rebinding
-  (Floyd F2).
+  script against the endpoints (review gate F6); Host allowlist blocks DNS-rebinding
+  (review gate F2).
 - Stdlib only — no dependencies beyond Python >=3.10 (already required by the plugin).
 """
 
@@ -47,7 +47,7 @@ DEFAULTS = {
     "pulse_html_dir": "~/Claude/Projects/ARA-Business-Pulse",
 }
 
-# FIXED refresh argv (Floyd F3: no shell, no config override — a config-file
+# FIXED refresh argv (review gate F3: no shell, no config override — a config-file
 # write must not become persistent arbitrary exec). --permission-mode
 # acceptEdits lets the skill write the HTML + state files without prompting;
 # --allowedTools pre-approves the plugin's two mail tools so the headless run
@@ -78,7 +78,7 @@ def _config() -> dict:
     try:
         with open(CONFIG_PATH) as f:
             loaded = json.load(f)
-        # Take only the known, safe key — never a command (Floyd F3).
+        # Take only the known, safe key — never a command (review gate F3).
         if isinstance(loaded, dict) and isinstance(loaded.get("pulse_html_dir"), str):
             cfg["pulse_html_dir"] = loaded["pulse_html_dir"]
     except (OSError, ValueError):
@@ -182,16 +182,16 @@ def _pulse_run_token(page_html: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
-# --- Anna's on-brand banner styling, inlined for SELF-CONTAINED injection -------
+# --- On-brand banner styling, inlined for SELF-CONTAINED injection --------------
 # The served HTML gets the banner prepended into an arbitrary pulse, so the styling
 # is INLINE (no dependency on the pulse's <style>, no <script>, no external assets —
 # CSP-safe under style-src 'unsafe-inline'). This mirrors the class-based
-# .scan-banner block Anna added to reference/digest-template.html for the inline
+# .scan-banner block added to reference/digest-template.html for the inline
 # (model-rendered) pulse. FUNCTIONAL alert palette held outside the brand-orange
 # rule: RED #A4161A (edge/account-chip #6E0D10), AMBER #8A5A00 (edge #5C3C00), white
 # type; IBM Plex Sans body + IBM Plex Mono status code/account chip (system
 # fallbacks). NOTE: the AMBER #8A5A00-vs-brand-orange functional-color exception is
-# flagged for Floyd's conscious sign-off.
+# flagged for the reviewer's conscious sign-off.
 _BANNER_BASE = (
     "position:sticky;top:0;z-index:10000;display:flex;align-items:center;"
     "flex-wrap:wrap;gap:8px 14px;padding:11px 18px;color:#FFFFFF;"
@@ -211,7 +211,7 @@ _BANNER_ACCOUNTS = (
 
 
 def _incomplete_banner(info: dict) -> str:
-    """RED 'incomplete scan' banner (Anna's styling) naming the affected account(s)
+    """RED 'incomplete scan' banner (on-brand styling) naming the affected account(s)
     — those that FAILED (timed out / stalled, contributed nothing) or were CAPPED
     (read but older in-window mail may be unread). Built ENTIRELY from the Python-
     written marker (account name, HTML-escaped) — no model output flows into it, so an
@@ -255,7 +255,7 @@ def _incomplete_banner(info: dict) -> str:
 
 
 def _neutral_banner() -> str:
-    """AMBER 'scan status unknown' banner (Anna's styling). N-A: this is the
+    """AMBER 'scan status unknown' banner (on-brand styling). N-A: this is the
     AUTHORITATIVE completeness surface, so it must NEVER imply 'complete' when it
     cannot confirm the served pulse matches the marker — say so instead of staying
     silent. Default on ANY uncertainty. Load-bearing (asserted): id and the string
@@ -339,7 +339,7 @@ def _run_refresh() -> None:
             err = None
         else:
             # Raw CLI output can contain mail fragments — log it, never
-            # return it over HTTP (Floyd F5).
+            # return it over HTTP (review gate F5).
             _log_refresh(f"exit {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
             err = (
                 f"Refresh failed (exit {proc.returncode}) — open Claude Code and run "
@@ -361,7 +361,7 @@ class Handler(BaseHTTPRequestHandler):
     def _csp(self, nonce: str | None) -> str:
         # Pulse HTML is generated from mail-derived content: same-origin as the
         # /refresh + /status endpoints, so scripts in it must be impossible
-        # except our nonce'd toolbar script (Floyd F6). Inline styles and data:
+        # except our nonce'd toolbar script (review gate F6). Inline styles and data:
         # images are what the template legitimately uses.
         script = f"script-src 'nonce-{nonce}'; " if nonce else "script-src 'none'; "
         return (
@@ -371,7 +371,7 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _host_ok(self) -> bool:
-        # DNS-rebinding defense (Floyd F2): an attacker page that rebinds its
+        # DNS-rebinding defense (review gate F2): an attacker page that rebinds its
         # hostname to 127.0.0.1 still sends its own Host header — reject it.
         host = (self.headers.get("Host") or "").strip()
         return re.match(r"^(127\.0\.0\.1|localhost)(:\d+)?$", host) is not None

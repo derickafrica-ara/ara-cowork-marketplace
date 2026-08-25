@@ -1,16 +1,16 @@
-# ARA Business Pulse (Cowork plugin) — PROTOTYPE, pending Floyd's go-live gate
+# ARA Business Pulse (Cowork plugin) — PROTOTYPE, pending the go-live review gate
 
 One plugin that bundles **the morning Chief-of-Staff routine** as a Cowork
 plugin: the `/ARA-business-pulse` skill + the host-native **`apple-mail` MCP
 server** (read + draft, never send), auto-registered, with a one-Python-dep
 bootstrap. Distributed through a private https-git marketplace.
 
-> **Status: assembled, pending live plugin-install validation on Derick's Mac +
-> Floyd's go-live gate.** This packages the **Floyd-gated, live-validated**
+> **Status: assembled, pending live plugin-install validation on a target Mac +
+> the go-live review gate.** This packages the **reviewed, live-validated**
 > `apple-mail-draft-mcp` server **unchanged** — it is not a new build. The plugin
 > adds only: manifest, `.mcp.json`, the SessionStart bootstrap hook, and the
 > skill. Requires Cowork (hooks + plugin-bundled local MCP servers run in the
-> Cowork desktop app). Still passes Floyd's gate before any ship.
+> Cowork desktop app). Still passes the review gate before any ship.
 
 ## Layout
 
@@ -24,15 +24,15 @@ ara-business-pulse/
 │   └── ara-business-pulse/     # the /ARA-business-pulse skill (COPY of the phase2-build source)
 │       ├── SKILL.md
 │       └── reference/            # teams-card.md, categories.md, config.md
-└── apple-mail/                   # the EXISTING Floyd-gated MCP server, vendored UNCHANGED
+└── apple-mail/                   # the EXISTING reviewed MCP server, vendored UNCHANGED
     ├── server.py                 # two tools: read_apple_mail, create_apple_mail_draft (stdio)
     ├── read_core.py / draft_core.py / config.py
     ├── requirements.txt          # mcp>=1.2.0 (the only runtime dep)
     └── applescript/              # the four static .applescript files the core modules call
 ```
 
-The MCP server is **vendored, not rebuilt** — copied unchanged from
-`00_Scorecard/ (same apple-mail MCP core)`. Its core modules
+The MCP server is **vendored, not rebuilt** — copied unchanged from an
+internal project folder (same apple-mail MCP core). Its core modules
 resolve the AppleScript files via `Path(__file__).parent / "applescript"`, so the
 `applescript/` directory MUST stay a sibling of `read_core.py`/`draft_core.py` —
 which the vendored layout preserves. The server's tests, dev README, and live-test
@@ -73,7 +73,7 @@ skill — expected), then `/reload-plugins`. First session shows
 "Setting up dependencies…" for ~30s while the bootstrap hook prepares the mail
 tool. Then: the skill's **first-run setup** asks for the per-person config (below)
 and you grant the one-time macOS Automation permission. Full step-by-step is the
-INSTALL-DESIGN + the employee guide Anna/Maggie polish.
+INSTALL-DESIGN + the employee guide.
 
 ## Per-person config
 
@@ -213,17 +213,17 @@ Then bookmark http://127.0.0.1:8788 — or set it as a Chrome startup page
 > "scan status unknown — treat as possibly incomplete"** banner (it never implies
 > "complete" on a bad marker). The banner on the **in-session inline preview and
 > the Teams card is best-effort** (model-rendered) and is **not** the completeness
-> check — when in doubt, trust this viewer. (Derick's decision, ratified at Floyd's
-> gate — a documented accepted residual.)
+> check — when in doubt, trust this viewer. (Derick's decision, ratified at the
+> review gate — a documented accepted residual.)
 
-> **Accepted residual risk (Floyd gate F2):** an Origin-less local client (any
+> **Accepted residual risk (review gate F2):** an Origin-less local client (any
 > process already running as the user) can still POST `/refresh` and trigger a
 > paid agent run — a denial-of-wallet nuisance, not a data-exposure path; the
 > 409 concurrency guard bounds it to one run at a time.
 
 **Config** (optional key in `~/.ara-business-pulse/config.json`). The refresh
 command itself is fixed in the server — not configurable, so a config-file
-write can never become arbitrary command execution (Floyd gate F3):
+write can never become arbitrary command execution (review gate F3):
 
 | Key | Default | What it is |
 |---|---|---|

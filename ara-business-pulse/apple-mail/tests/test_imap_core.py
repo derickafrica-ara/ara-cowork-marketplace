@@ -1,7 +1,7 @@
 """imap_core driver-level tests (hermetic — NEVER touches network, imaplib
 sockets, or the real Keychain; `security` is stubbed to return a SENTINEL).
 
-Build-gate coverage map (Floyd v0.4 spec):
+Build-gate coverage map (v0.4 spec):
   R1/R7  hardcoded hosts + Keychain services; security argv shape (absolute path,
          list argv, no shell, bounded timeout).
   R9     secret hygiene: the SENTINEL password appears in NO artifact — run-log,

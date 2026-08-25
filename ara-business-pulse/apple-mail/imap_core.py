@@ -1,6 +1,6 @@
 """imap_core — the PERSONAL-account IMAP transport (COND-8 v0.4).
 
-TRANSPORT ONLY (Floyd R28): this module fetches in-window, known-sender message
+TRANSPORT ONLY (R28): this module fetches in-window, known-sender message
 bytes for ONE named personal account directly from the provider over validated
 TLS. It re-implements NO COND-8 logic — the allow-list boundary, ships-dark skip,
 known-senders enforcement, audit logging, and marker write all stay in
@@ -10,7 +10,7 @@ never enters this module: the orchestrator injects a `keep_sender(header_text)`
 predicate (built from its own _extract_sender_address + sender_is_known — the
 already-hardened display-name-spoof discipline, per R17).
 
-Security posture (Floyd's spec, R-numbers refer to the v0.4 build spec):
+Security posture (review-gate spec, R-numbers refer to the v0.4 build spec):
   R1  Hosts/ports are HARDCODED module constants — never env/config/.mcp.json/
       scanned-content configurable.
   R2/R3/R4  Implicit TLS only: imaplib.IMAP4_SSL on 993 with
@@ -432,13 +432,13 @@ class PersonalImapDriver:
         check_budget()
 
         # ---- Phase 1 (R17): INTERNALDATE + header fields ONLY — no bodies. ----
-        # NOTE (flagged deviation from R17's letter, for Floyd): the spec names
+        # NOTE (flagged deviation from R17's letter, for the reviewer): the spec names
         # ENVELOPE; this uses BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)] —
         # still metadata-only (zero body bytes), still PEEK (no flags), but
         # parsed by the SAME hardened stdlib email parser as phase 2 instead of
         # a hand-rolled ENVELOPE s-expression parser (which would be NEW,
         # unreviewed parsing surface). Rationale in the hand-back; swap is
-        # localized if Floyd prefers ENVELOPE.
+        # localized if the reviewer prefers ENVELOPE.
         status, data = conn.uid(
             "FETCH",
             ",".join(uids),
