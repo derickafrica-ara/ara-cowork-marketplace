@@ -1,8 +1,8 @@
 """Read-side test doubles for read_core (no Mail.app / TCC / MCP SDK required).
 
-This is the READ-side subset of the canonical `tests/fakes.py` in the FALKE dev
+This is the READ-side subset of the canonical `tests/fakes.py` in the private dev
 tree (apple-mail-draft-mcp). The marketplace plugin currently ships read-path
-tests only; the draft-side doubles (RecordingMailDriver, etc.) live in the FALKE
+tests only; the draft-side doubles (RecordingMailDriver, etc.) live in that private
 tree and can be ported here if/when draft tests are added to the plugin repo.
 """
 
@@ -36,7 +36,7 @@ class FakeReadMailDriver(ReadMailDriver):
     ZERO message reads occurred against it. Enforcement happens in read_core
     (the account boundary), BEFORE this driver's read_inbox is ever called.
 
-    Fault injection (all optional; empty defaults == the plain FALKE fake):
+    Fault injection (all optional; empty defaults == the plain upstream fake):
       - `timeout_accounts`  : read_inbox() on one of these raises ReadMailTimeout,
         modeling a large personal inbox exceeding the 90s ReadMailDriver timeout.
         A per-account DEGRADABLE fault (max-availability).

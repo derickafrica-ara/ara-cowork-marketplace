@@ -6,14 +6,14 @@ Config + docs only — recipient-domain allow-list widened to named client domai
 (Derick's decision, 2026-07-18). No validation-logic change.
 
 - **What.** `APPLE_MAIL_DRAFT_ALLOWED_DOMAINS` (`.mcp.json` env) widened from
-  `ara-data.com` to `ara-data.com,falkecorp.com,falkehoa.com` — the two Falke
-  client domains, as an explicit NAMED-domain list (no wildcard, no "allow all").
+  `ara-data.com` to `ara-data.com` plus the engagement's client mail domains —
+  supplied per deployment, as an explicit NAMED-domain list (no wildcard, no "allow all").
   Contract text updated to match (tool docstring, SKILL.md, README,
   reference/config.md). The **from-account (sender) allow-list is UNCHANGED** —
   drafts still compose only from the ARA business accounts. The **code
   fail-closed default is UNCHANGED** (`ara-data.com` only): a deployment that
   loses or empties its env narrows back to ARA-only, never widens.
-- **Why.** Client-bound drafts (e.g. to mfalke@falkecorp.com) were correctly
+- **Why.** Client-bound drafts (e.g. to a named client contact) were correctly
   refused by the ARA-only list; Derick wants client-bound drafts stageable in
   his Mail. Verified live 2026-07-18: the refusal fired fail-closed as designed
   before this change.
@@ -29,7 +29,7 @@ Config + docs only — recipient-domain allow-list widened to named client domai
   every attempt (created or rejected) audit-logged with full recipients in the
   run-log, and the skill's COND-1 rule still forbids content-directed drafting.
   Per Floyd's gate condition C-1, the skill REQUIRES the digest to name
-  client-bound drafts explicitly, per domain ("2 drafts staged to falkecorp.com
+  client-bound drafts explicitly, per domain ("2 drafts staged to <client-domain>
   — review before sending") — the extra-care review surface BODY-CLEAN forbids
   inside the draft itself.
 - **Go-live / restart (read this or the widen appears broken).** The env is

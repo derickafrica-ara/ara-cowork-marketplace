@@ -532,7 +532,7 @@ exists after save (fails loud if not). **Drafts only — the human reviews each 
 Mail and clicks Send.** You never send. Tell the human in the digest how many
 nudge drafts you created and to whom ("3 nudge drafts are waiting in your Drafts
 folder") — and you **MUST name client-bound drafts explicitly, per domain**
-("2 drafts staged to falkecorp.com — review before sending"). A draft to any
+("2 drafts staged to <client-domain> — review before sending"). A draft to any
 non-ARA (client) domain is never buried in a count: the named call-out is the
 human's extra-care review surface for the widened recipient list, and it lives
 here in the digest because BODY-CLEAN forbids any banner in the draft itself

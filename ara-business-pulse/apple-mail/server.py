@@ -56,9 +56,9 @@ def create_apple_mail_draft(
         would send from the correct address. Off-list or unconfigured sender ->
         refused (fail closed). No silent fallback to the default account.
       - Recipients must be on the configured recipient-domain allow-list — an
-        explicit NAMED-domain list, never a wildcard (this deployment:
-        ara-data.com + the named Falke client domains falkecorp.com /
-        falkehoa.com; fail-closed code default: ara-data.com only). Off-list
+        explicit NAMED-domain list, never a wildcard (configured per
+        deployment via the env var; fail-closed code default:
+        ara-data.com only). Off-list
         recipients are refused.
       - On success the draft's existence is verified before returning, BODY-CLEAN
         (FIX 2): a recent draft in the sender account's Drafts is matched on

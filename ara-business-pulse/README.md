@@ -3,8 +3,7 @@
 One plugin that bundles **the morning Chief-of-Staff routine** as a Cowork
 plugin: the `/ARA-business-pulse` skill + the host-native **`apple-mail` MCP
 server** (read + draft, never send), auto-registered, with a one-Python-dep
-bootstrap. Distributed through the same private https-git marketplace
-The falke-business-pulse plugin is a separate client engagement plugin.
+bootstrap. Distributed through a private https-git marketplace.
 
 > **Status: assembled, pending live plugin-install validation on Derick's Mac +
 > Floyd's go-live gate.** This packages the **Floyd-gated, live-validated**
@@ -87,7 +86,7 @@ They are **not** pasted as env vars at install.
 | What | Where | Default | Secret? |
 |---|---|---|---|
 | Read account allow-list | `APPLE_MAIL_READ_ALLOWED_ACCOUNTS` (`.mcp.json` env) | `ara-data.com,ARAdata.onmicrosoft.com` | no |
-| Recipient allow-list (drafts) | `APPLE_MAIL_DRAFT_ALLOWED_DOMAINS` (`.mcp.json` env) | `ara-data.com,falkecorp.com,falkehoa.com` — named domains only; code fail-closed default stays `ara-data.com` | no |
+| Recipient allow-list (drafts) | `APPLE_MAIL_DRAFT_ALLOWED_DOMAINS` (`.mcp.json` env) | `ara-data.com` shipped; add the engagement's client mail domains per deployment — named domains only, never a wildcard; code fail-closed default stays `ara-data.com` | no |
 | From-account allow-list (sender) | `APPLE_MAIL_DRAFT_FROM_ACCOUNTS` (`.mcp.json` env) | `ara-data.com,ARAdata.onmicrosoft.com` | no |
 | Dropbox project folder | collected on first run → `~/.ara-business-pulse/config.json` | `~/Library/CloudStorage/Dropbox/<project>` (Available offline) | no |
 | Teams webhook URL (**optional**) | collected on first run → `~/.ara-business-pulse/config.json` | *(per channel — skip to run without the Teams post)* | **YES — never commit** |
@@ -174,7 +173,7 @@ certs would break on normal rotation.
 
 A localhost-only web viewer so the pulse is the first thing you see when you
 open Chrome each morning. Serves the **latest** pulse HTML at
-**http://127.0.0.1:8788** (port 8788 so it can coexist with the Falke viewer
+**http://127.0.0.1:8788** (port 8788 so it can coexist with the other pulse viewer
 on 8787) with a toolbar showing "Data last refreshed on hh:mm:ss dd/mm/yyyy"
 and a **Refresh** button that runs the skill headlessly in Claude Code and
 reloads the page when done.
