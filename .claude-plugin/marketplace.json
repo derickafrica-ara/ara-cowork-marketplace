@@ -13,6 +13,11 @@
       "name": "woodgrain",
       "source": "./woodgrain",
       "description": "A late-1970s home-console look for the Claude desktop and mobile apps, in warm clay, ivory and slate: a chunky pixel-art scene with a sunburst and scanlines, and an 8-bit chime."
+    },
+    {
+      "name": "papercut",
+      "source": "./papercut",
+      "description": "A clay-orange cut-paper look for the Claude desktop and mobile apps: ivory paper shapes with hand-cut edges, hand-drawn ink threads and a slowly turning ink bloom."
     }
   ]
 }
